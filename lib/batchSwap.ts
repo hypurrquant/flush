@@ -1,98 +1,202 @@
-import type { Address } from 'viem';
-import { UNISWAP_V3_ROUTER } from './swap';
+import { createBaseAccountSDK, getCryptoKeyAccount, base } from '@base-org/account';
+import { numberToHex, encodeFunctionData, type Address, type Hex, createPublicClient, http } from 'viem';
+import { base as baseChain } from 'viem/chains';
+import { ERC20_ABI } from './constants';
 
-export interface BatchSwapTransaction {
-  to: Address;
-  value: bigint;
-  data: `0x${string}`;
-}
+// Odos Router address on Base
+const ODOS_ROUTER_ADDRESS = '0x4e3288c9ca110bcc42bfa01046729385107d5f02' as Address;
 
 /**
- * Prepare batch transactions for swapping multiple tokens to USDC
- * This function creates approve + swap transactions that can be batched
+ * Check if token approval is sufficient for swap
  */
-export async function prepareBatchSwapTransactions(
-  tokens: Array<{
-    address: Address;
-    amount: bigint;
-    decimals: number;
-  }>,
-  recipient: Address,
-  usdcAddress: Address
-): Promise<BatchSwapTransaction[]> {
-  const transactions: BatchSwapTransaction[] = [];
-
-  for (const token of tokens) {
-    // 1. Approve the router to spend tokens
-    transactions.push({
-      to: token.address,
-      value: 0n,
-      data: encodeApprove(UNISWAP_V3_ROUTER as Address, token.amount),
+export async function checkTokenApproval(
+  tokenAddress: Address,
+  ownerAddress: Address,
+  amount: bigint,
+  spenderAddress: Address = ODOS_ROUTER_ADDRESS
+): Promise<{ approved: boolean; currentAllowance: bigint; needsApproval: boolean }> {
+  try {
+    const publicClient = createPublicClient({
+      chain: baseChain,
+      transport: http(),
     });
 
-    // 2. Swap transaction (simplified - in production use Uniswap V3 Router)
-    // Note: This is a placeholder. You'll need to integrate with Uniswap V3 Router
-    // or use a swap aggregator like 0x API for actual swap execution
-    transactions.push({
-      to: UNISWAP_V3_ROUTER as Address,
-      value: 0n,
-      data: encodeSwap(token.address, usdcAddress, token.amount, recipient),
-    });
+    const currentAllowance = await publicClient.readContract({
+      address: tokenAddress,
+      abi: ERC20_ABI,
+      functionName: 'allowance',
+      args: [ownerAddress, spenderAddress],
+    }) as bigint;
+
+    const approved = currentAllowance >= amount;
+    const needsApproval = !approved;
+
+    return {
+      approved,
+      currentAllowance: currentAllowance as bigint,
+      needsApproval,
+    };
+  } catch (error) {
+    console.error('Error checking token approval:', error);
+    // If we can't check, assume approval is needed for safety
+    return {
+      approved: false,
+      currentAllowance: 0n,
+      needsApproval: true,
+    };
   }
-
-  return transactions;
 }
 
 /**
- * Encode approve function call
+ * Create approve call data
+ * Uses max uint256 for unlimited approval to avoid repeated approvals
  */
-function encodeApprove(spender: Address, amount: bigint): `0x${string}` {
-  // In production, use viem's encodeFunctionData
-  // This is a simplified version
-  return `0x095ea7b3${encodeAddress(spender)}${encodeUint256(amount)}` as `0x${string}`;
+export function createApproveCall(
+  tokenAddress: Address,
+  spenderAddress: Address,
+  _amount: bigint
+): { to: Address; value: Hex; data: Hex } {
+  // Use max uint256 for unlimited approval (more gas efficient in long run)
+  // This way user only needs to approve once per token
+  const MAX_UINT256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
+  
+  return {
+    to: tokenAddress,
+    value: '0x0' as Hex,
+    data: encodeFunctionData({
+      abi: ERC20_ABI,
+      functionName: 'approve',
+      args: [spenderAddress, MAX_UINT256],
+    }),
+  };
 }
 
 /**
- * Encode swap function call (placeholder - needs actual Uniswap V3 Router implementation)
+ * Send batch transaction using Base Account SDK
  */
-function encodeSwap(
-  _tokenIn: Address,
-  _tokenOut: Address,
-  _amountIn: bigint,
-  _recipient: Address
-): `0x${string}` {
-  // This is a placeholder. In production, you'd use Uniswap V3 Router's exactInputSingle
-  // or integrate with 0x API for quotes and swaps
-  // For now, return empty data
-  return '0x' as `0x${string}`;
+export async function sendBatchTransaction(
+  calls: Array<{ to: Address; value: Hex; data: Hex }>,
+  chainId: number = base.constants.CHAIN_IDS.base
+): Promise<string> {
+  try {
+    console.log('\n🚀 Preparing to send batch transaction via Base Account SDK...');
+    
+    const sdk = createBaseAccountSDK({
+      appName: 'Flush Swap',
+      appLogoUrl: 'https://base.org/logo.png',
+      appChainIds: [base.constants.CHAIN_IDS.base],
+    });
+
+    const provider = sdk.getProvider();
+    const cryptoAccount = await getCryptoKeyAccount();
+    const fromAddress = cryptoAccount?.account?.address as Address;
+
+    if (!fromAddress) {
+      throw new Error('No account found');
+    }
+
+    console.log('👤 From Address:', fromAddress);
+    console.log('⛓️  Chain ID:', chainId, `(0x${chainId.toString(16)})`);
+    console.log('📦 Number of Calls:', calls.length);
+    
+    const formattedCalls = calls.map((call, index) => {
+      console.log(`\n  Call ${index + 1}:`);
+      console.log('    to:', call.to);
+      console.log('    value:', call.value);
+      console.log('    data:', call.data.substring(0, 66) + '...' + (call.data.length > 66 ? call.data.substring(call.data.length - 20) : ''));
+      console.log('    data length:', call.data.length, 'bytes');
+      
+      return {
+        to: call.to,
+        value: call.value,
+        data: call.data,
+      };
+    });
+
+    const requestParams = {
+      version: '2.0.0',
+      from: fromAddress,
+      chainId: numberToHex(chainId),
+      atomicRequired: true, // All calls must succeed or all fail
+      calls: formattedCalls,
+    };
+
+    console.log('\n📤 Sending wallet_sendCalls request:');
+    console.log('  Method: wallet_sendCalls');
+    console.log('  Params:', JSON.stringify({
+      ...requestParams,
+      calls: requestParams.calls.map(c => ({
+        to: c.to,
+        value: c.value,
+        data: c.data.substring(0, 20) + '...' + c.data.substring(c.data.length - 20)
+      }))
+    }, null, 2));
+
+    const result = await provider.request({
+      method: 'wallet_sendCalls',
+      params: [requestParams],
+    });
+
+    console.log('\n✅ Batch transaction sent successfully!');
+    console.log('  Result:', result);
+    return result as string;
+  } catch (error: unknown) {
+    console.error('Batch transaction failed:', error);
+
+    if (error && typeof error === 'object' && 'code' in error) {
+      const errorWithCode = error as { code: number; message?: string };
+      if (errorWithCode.code === 4001) {
+        throw new Error('User rejected the transaction');
+      } else if (errorWithCode.code === 5740) {
+        throw new Error('Batch too large for wallet to process');
+      } else if (errorWithCode.code === -32602) {
+        throw new Error('Invalid request format');
+      } else {
+        throw new Error(errorWithCode.message || 'Unknown error');
+      }
+    } else if (error instanceof Error) {
+      throw error;
+    } else {
+      throw new Error('Unknown error');
+    }
+  }
 }
 
 /**
- * Helper to encode address for ABI encoding
+ * Check wallet capabilities for batch transactions
  */
-function encodeAddress(address: Address): string {
-  return address.slice(2).padStart(64, '0');
+export async function checkBatchCapabilities(): Promise<boolean> {
+  try {
+    const sdk = createBaseAccountSDK({
+      appName: 'Flush Swap',
+      appLogoUrl: 'https://base.org/logo.png',
+      appChainIds: [base.constants.CHAIN_IDS.base],
+    });
+
+    const provider = sdk.getProvider();
+    const cryptoAccount = await getCryptoKeyAccount();
+    const address = cryptoAccount?.account?.address as Address;
+
+    if (!address) {
+      return false;
+    }
+
+    const capabilities = await provider.request({
+      method: 'wallet_getCapabilities',
+      params: [address],
+    }) as Record<number, { atomicBatch?: { supported: boolean } }>;
+
+    const baseCapabilities = capabilities[base.constants.CHAIN_IDS.base];
+
+    if (baseCapabilities?.atomicBatch?.supported) {
+      console.log('Atomic batching is supported');
+      return true;
+    } else {
+      console.log('Atomic batching is not supported');
+      return false;
+    }
+  } catch (error) {
+    console.error('Failed to check capabilities:', error);
+    return false;
+  }
 }
-
-/**
- * Helper to encode uint256 for ABI encoding
- */
-function encodeUint256(value: bigint): string {
-  return value.toString(16).padStart(64, '0');
-}
-
-/**
- * Get quote for swapping tokens (placeholder)
- * In production, use Uniswap V3 Quoter or 0x API
- */
-export async function getSwapQuote(
-  tokenIn: Address,
-  tokenOut: Address,
-  amountIn: bigint
-): Promise<bigint> {
-  // Placeholder - implement actual quote logic
-  // For now, return a rough estimate (99% of input)
-  return (amountIn * 99n) / 100n;
-}
-
-

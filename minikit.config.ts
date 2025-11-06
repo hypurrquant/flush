@@ -19,8 +19,8 @@ export const minikitConfig = {
   miniapp: {
     version: "1",
     name: "Flush", 
-    subtitle: "Multiswap your tokens at once", 
-    description: "Multiswap your tokens into one with a single transaction. Clean up dust tokens, consolidate your portfolio, and save on gas fees effortlessly.",
+    subtitle: "Consolidate your tokens in one transaction", 
+    description: "Consolidate your tokens in one transaction. Clean up dust tokens and save on gas fees.",
     screenshotUrls: [
       `${ROOT_URL}/screenshot.png`,
       `${ROOT_URL}/screenshot-portrait.png`
@@ -33,9 +33,9 @@ export const minikitConfig = {
     primaryCategory: "finance",
     tags: ["finance", "defi", "swap", "wallet", "base"],
     heroImageUrl: `${ROOT_URL}/hero.png`, 
-    tagline: "Multiswap tokens in one tap",
-    ogTitle: "Flush - Multi-Swap Made Easy",
-    ogDescription: "Multi-swap all your Base tokens into one with a single transaction. The easiest way to consolidate your wallet.",
+    tagline: "Consolidate your tokens in one transaction",
+    ogTitle: "Flush - Consolidate Your Tokens",
+    ogDescription: "Consolidate all your Base tokens into one with a single transaction. Save on gas fees.",
     ogImageUrl: `${ROOT_URL}/hero.png`,
     noindex: false
   },
