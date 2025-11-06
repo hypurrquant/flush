@@ -71,7 +71,8 @@
 
 .outputTokenDropdown {
   position: absolute;
-  top: calc(100% + 0.5rem);
+  bottom: calc(100% + 0.5rem);
+  left: 0;
   right: 0;
   background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -119,8 +120,8 @@
 }
 
 .outputTokenOptionSelected {
-  background: rgba(247, 217, 84, 0.1);
-  border: 1px solid rgba(247, 217, 84, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
 .outputTokenOptionImage {
@@ -280,7 +281,7 @@
 }
 
 .dustFilterCheckbox:hover {
-  border-color: rgba(247, 217, 84, 0.5);
+  border-color: rgba(255, 255, 255, 0.4);
   background: rgba(255, 255, 255, 0.15);
 }
 
@@ -487,13 +488,13 @@
 }
 
 .tokenItemSelected {
-  background: rgba(247, 217, 84, 0.08);
-  border-bottom-color: rgba(247, 217, 84, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  border-bottom-color: rgba(255, 255, 255, 0.2);
 }
 
 .tokenItemSelected:hover {
-  background: rgba(247, 217, 84, 0.12);
-  border-bottom-color: rgba(247, 217, 84, 0.3);
+  background: rgba(255, 255, 255, 0.12);
+  border-bottom-color: rgba(255, 255, 255, 0.3);
 }
 
 .tokenInfo {
@@ -556,7 +557,7 @@
 }
 
 .tokenCheckbox:hover {
-  border-color: rgba(247, 217, 84, 0.5);
+  border-color: rgba(255, 255, 255, 0.4);
   background: rgba(255, 255, 255, 0.15);
 }
 
@@ -586,6 +587,69 @@
   background: linear-gradient(to top, rgba(10, 10, 10, 0.95) 0%, transparent 100%);
   backdrop-filter: blur(10px);
   z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.outputTokenSelectorBottom {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.outputTokenSelectorWrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.outputTokenLabelBottom {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.6);
+  white-space: nowrap;
+}
+
+.outputTokenButtonBottom {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 0.875rem;
+  font-weight: 500;
+  min-height: 44px;
+  flex: 1;
+}
+
+.outputTokenButtonBottom:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.outputTokenArrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  animation: bounce 2s infinite;
+}
+
+@keyframes bounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
 }
 
 .swapButton {
@@ -792,7 +856,7 @@
 
 .settingsInput:focus {
   outline: none;
-  border-color: #f7d954;
+  border-color: rgba(255, 255, 255, 0.4);
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -821,7 +885,7 @@
 }
 
 .settingsCheckbox:hover {
-  border-color: rgba(247, 217, 84, 0.5);
+  border-color: rgba(255, 255, 255, 0.4);
   background: rgba(255, 255, 255, 0.15);
 }
 

@@ -33,6 +33,7 @@ import { sendNotification, NotificationTemplates } from "../lib/notifications";
 import { TokenImage } from "../components/TokenImage";
 import { OnboardingModal } from "../components/OnboardingModal";
 import { BottomNavigation } from "../components/BottomNavigation";
+import { RewardsTab } from "../components/RewardsTab";
 import type { Hex, Address as ViemAddress } from "viem";
 import { numberToHex } from "viem";
 import styles from "./page.module.css";
@@ -59,7 +60,7 @@ export default function Home() {
   const [tokenPrices, setTokenPrices] = useState<Map<string, number>>(new Map());
   const [isLoadingTokens, setIsLoadingTokens] = useState(false);
   const [hideDustTokens, setHideDustTokens] = useState(true); // 기본값: dust token 숨김
-  const [activeTab, setActiveTab] = useState<'balance' | 'swapHistory' | 'hideSmallBalance'>('balance');
+  const [activeTab, setActiveTab] = useState<'balance' | 'swapHistory' | 'rewards' | 'hideSmallBalance'>('balance');
   const [isTestingQuote, setIsTestingQuote] = useState(false);
   const [quoteResult, setQuoteResult] = useState<OdosQuoteResponse | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
@@ -888,70 +889,6 @@ export default function Home() {
           )}
         </div>
         
-        {/* Output Token Selector */}
-        {isConnected && (
-          <div className={styles.outputTokenSelector}>
-            <div className={styles.outputTokenLabel}>출력 토큰:</div>
-            <button
-              onClick={() => setShowOutputTokenSelector(!showOutputTokenSelector)}
-              className={styles.outputTokenButton}
-            >
-              {outputToken.image && (
-                <TokenImage
-                  src={outputToken.image}
-                  alt={outputToken.symbol}
-                  width={20}
-                  height={20}
-                  className={styles.outputTokenImage}
-                />
-              )}
-              <span className={styles.outputTokenSymbol}>{outputToken.symbol}</span>
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ marginLeft: '0.25rem' }}>
-                <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </button>
-            
-            {showOutputTokenSelector && (
-              <div className={styles.outputTokenDropdown}>
-                <div className={styles.outputTokenDropdownHeader}>출력 토큰 선택</div>
-                <div className={styles.outputTokenList}>
-                  {availableOutputTokens.map((token) => {
-                    const isSelected = token.address.toLowerCase() === outputTokenAddress.toLowerCase();
-                    return (
-                      <button
-                        key={token.address}
-                        onClick={() => {
-                          setOutputTokenAddress(token.address);
-                          setShowOutputTokenSelector(false);
-                        }}
-                        className={`${styles.outputTokenOption} ${isSelected ? styles.outputTokenOptionSelected : ''}`}
-                      >
-                        {token.image && (
-                          <TokenImage
-                            src={token.image}
-                            alt={token.symbol}
-                            width={32}
-                            height={32}
-                            className={styles.outputTokenOptionImage}
-                          />
-                        )}
-                        <div className={styles.outputTokenOptionInfo}>
-                          <div className={styles.outputTokenOptionSymbol}>{token.symbol}</div>
-                          <div className={styles.outputTokenOptionName}>{token.name}</div>
-                        </div>
-                        {isSelected && (
-                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                            <path d="M13.3333 4L6 11.3333L2.66667 8" stroke="#f7d954" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
         
         {/* Settings & Wallet Connection */}
         <div className={styles.headerActions}>
@@ -996,6 +933,37 @@ export default function Home() {
             </div>
             
             <div className={styles.settingsBody}>
+              {/* Protocol Fees */}
+              <div className={styles.settingsItem} style={{ marginBottom: '1.5rem' }}>
+                <label className={styles.settingsLabel} style={{ marginBottom: '0.75rem' }}>
+                  Protocol Fees
+                </label>
+                <div style={{
+                  padding: '1rem',
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: '8px',
+                  fontSize: '0.875rem',
+                  lineHeight: '1.6',
+                  color: 'rgba(255, 255, 255, 0.8)'
+                }}>
+                  <p style={{ margin: '0 0 0.75rem 0', fontWeight: '600' }}>
+                    Odos Protocol Fees
+                  </p>
+                  <ul style={{ margin: '0', paddingLeft: '1.25rem', listStyle: 'disc' }}>
+                    <li style={{ marginBottom: '0.5rem' }}>
+                      <strong>Volatile & Custom Assets:</strong> 0.15% (15 bps)
+                    </li>
+                    <li style={{ marginBottom: '0.5rem' }}>
+                      <strong>Stablecoin Swaps:</strong> 0.03% (3 bps)
+                    </li>
+                  </ul>
+                  <p style={{ margin: '0.75rem 0 0 0', fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.6)' }}>
+                    Fees are applied in addition to gas and potential slippage. Users control slippage and gas settings.
+                  </p>
+                </div>
+              </div>
+
               {/* Slippage Tolerance */}
               <div className={styles.settingsItem}>
                 <label className={styles.settingsLabel}>
@@ -1552,7 +1520,9 @@ export default function Home() {
 
       {/* Body - Tab Content */}
       <div className={styles.body}>
-        {!isConnected && !showOnboarding ? (
+        {activeTab === 'rewards' && isConnected ? (
+          <RewardsTab address={address} />
+        ) : !isConnected && !showOnboarding ? (
           <div className={styles.onboardingSection}>
             <div className={styles.onboardingContent}>
               <h2 className={styles.onboardingTitle}>Welcome to Flush</h2>
@@ -1665,30 +1635,105 @@ export default function Home() {
         ) : null}
       </div>
 
-      {/* Fixed Bottom Button */}
-      <div className={styles.bottomButtonContainer}>
-        <button 
-          className={styles.swapButton}
-          disabled={selectedTokens.size === 0 || isTestingQuote}
-          onClick={handleTestQuote}
-          style={{ marginBottom: selectedTokens.size > 0 ? '0.5rem' : '0' }}
-        >
-          {isTestingQuote
-            ? "Testing Quote API..."
-            : selectedTokens.size === 0
-            ? "Select tokens to test"
-            : `Test Quote API (${selectedTokens.size} → ${outputToken.symbol})`}
-        </button>
-        {selectedTokens.size > 0 && (
+      {/* Fixed Bottom Button with Output Token Selector */}
+      {activeTab === 'balance' && (
+        <div className={styles.bottomButtonContainer}>
+          {/* Output Token Selector */}
+          {isConnected && (
+            <div className={styles.outputTokenSelectorBottom}>
+              <div className={styles.outputTokenSelectorWrapper}>
+                <div className={styles.outputTokenLabelBottom}>출력 토큰:</div>
+                <button
+                  onClick={() => setShowOutputTokenSelector(!showOutputTokenSelector)}
+                  className={styles.outputTokenButtonBottom}
+                >
+                  {outputToken.image && (
+                    <TokenImage
+                      src={outputToken.image}
+                      alt={outputToken.symbol}
+                      width={20}
+                      height={20}
+                      className={styles.outputTokenImage}
+                    />
+                  )}
+                  <span className={styles.outputTokenSymbol}>{outputToken.symbol}</span>
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ marginLeft: '0.25rem' }}>
+                    <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </button>
+                
+                {showOutputTokenSelector && (
+                  <div className={styles.outputTokenDropdown}>
+                    <div className={styles.outputTokenDropdownHeader}>출력 토큰 선택</div>
+                    <div className={styles.outputTokenList}>
+                      {availableOutputTokens.map((token) => {
+                        const isSelected = token.address.toLowerCase() === outputTokenAddress.toLowerCase();
+                        return (
+                          <button
+                            key={token.address}
+                            onClick={() => {
+                              setOutputTokenAddress(token.address);
+                              setShowOutputTokenSelector(false);
+                            }}
+                            className={`${styles.outputTokenOption} ${isSelected ? styles.outputTokenOptionSelected : ''}`}
+                          >
+                            {token.image && (
+                              <TokenImage
+                                src={token.image}
+                                alt={token.symbol}
+                                width={32}
+                                height={32}
+                                className={styles.outputTokenOptionImage}
+                              />
+                            )}
+                            <div className={styles.outputTokenOptionInfo}>
+                              <div className={styles.outputTokenOptionSymbol}>{token.symbol}</div>
+                              <div className={styles.outputTokenOptionName}>{token.name}</div>
+                            </div>
+                            {isSelected && (
+                              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                <path d="M13.3333 4L6 11.3333L2.66667 8" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                              </svg>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+              {/* Arrow pointing to button */}
+              <div className={styles.outputTokenArrow}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12 5V19M12 19L19 12M12 19L5 12" stroke="rgba(255, 255, 255, 0.6)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </div>
+            </div>
+          )}
+          
           <button 
             className={styles.swapButton}
-            disabled={selectedTokens.size === 0}
-            style={{ opacity: 0.5 }}
+            disabled={selectedTokens.size === 0 || isTestingQuote}
+            onClick={handleTestQuote}
+            style={{ marginBottom: selectedTokens.size > 0 ? '0.5rem' : '0' }}
           >
-            Swap to {outputToken.symbol} (Coming Soon)
+            {isTestingQuote
+              ? "Testing Quote API..."
+              : selectedTokens.size === 0
+              ? "Select tokens to test"
+              : `Test Quote API (${selectedTokens.size} → ${outputToken.symbol})`}
           </button>
-        )}
-      </div>
+          {selectedTokens.size > 0 && (
+            <button 
+              className={styles.swapButton}
+              disabled={selectedTokens.size === 0}
+              style={{ opacity: 0.5 }}
+            >
+              Swap to {outputToken.symbol} (Coming Soon)
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Bottom Navigation Bar */}
       {isConnected && (
