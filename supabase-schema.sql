@@ -42,3 +42,4 @@ $$ language 'plpgsql';
 CREATE TRIGGER update_swaps_updated_at BEFORE UPDATE ON swaps
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+

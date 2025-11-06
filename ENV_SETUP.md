@@ -36,3 +36,4 @@ For local development, you can use:
 NEXT_PUBLIC_URL=http://localhost:3000
 ```
 
+

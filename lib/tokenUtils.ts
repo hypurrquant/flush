@@ -1,5 +1,4 @@
 import { formatUnits } from 'viem';
-import { ERC20_ABI } from './constants';
 import type { Address } from 'viem';
 
 export interface TokenBalance {
@@ -24,4 +23,5 @@ export function formatCurrency(value: string): string {
     maximumFractionDigits: 6,
   });
 }
+
 

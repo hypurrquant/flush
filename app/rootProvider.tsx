@@ -8,9 +8,14 @@ export function RootProvider({ children }: { children: ReactNode }) {
   return (
     <OnchainKitProvider
       apiKey={process.env.NEXT_PUBLIC_ONCHAINKIT_API_KEY}
+      rpcUrl={process.env.NEXT_PUBLIC_BASE_RPC_URL}
+      projectId={process.env.NEXT_PUBLIC_PROJECT_ID}
       chain={base}
       config={{
         appearance: {
+          name: "Flush",
+          logo: "/blue-icon.png",
+          theme: "base",
           mode: "auto",
         },
         wallet: {

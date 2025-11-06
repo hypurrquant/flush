@@ -1,6 +1,4 @@
-import { maxUint256 } from 'viem';
 import type { Address } from 'viem';
-import { ERC20_ABI } from './constants';
 import { UNISWAP_V3_ROUTER } from './swap';
 
 export interface BatchSwapTransaction {
@@ -58,10 +56,10 @@ function encodeApprove(spender: Address, amount: bigint): `0x${string}` {
  * Encode swap function call (placeholder - needs actual Uniswap V3 Router implementation)
  */
 function encodeSwap(
-  tokenIn: Address,
-  tokenOut: Address,
-  amountIn: bigint,
-  recipient: Address
+  _tokenIn: Address,
+  _tokenOut: Address,
+  _amountIn: bigint,
+  _recipient: Address
 ): `0x${string}` {
   // This is a placeholder. In production, you'd use Uniswap V3 Router's exactInputSingle
   // or integrate with 0x API for quotes and swaps
@@ -96,4 +94,5 @@ export async function getSwapQuote(
   // For now, return a rough estimate (99% of input)
   return (amountIn * 99n) / 100n;
 }
+
 
