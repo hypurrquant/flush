@@ -58,3 +58,29 @@
     }
   }
 }
+
+/* OnchainKit wallet component styles override for dark theme */
+[data-ock-theme] button,
+[data-ock-theme] [role="button"] {
+  background-color: rgba(247, 217, 84, 0.2) !important;
+  border: 2px solid #f7d954 !important;
+  color: #f7d954 !important;
+}
+
+[data-ock-theme] button:hover,
+[data-ock-theme] [role="button"]:hover {
+  background-color: rgba(247, 217, 84, 0.3) !important;
+}
+
+/* Wallet component wrapper styles */
+[data-ock-wallet] {
+  display: flex !important;
+  align-items: center !important;
+}
+
+/* Force header layout */
+.headerActions {
+  display: flex !important;
+  gap: 1rem !important;
+  align-items: center !important;
+}

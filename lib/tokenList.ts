@@ -52,36 +52,34 @@ export async function fetchTokensFromOnchainKit(
 }
 
 /**
- * 인기 토큰 심볼들로 토큰 정보 가져오기
+ * Base 네트워크의 인기 토큰 목록 가져오기 (상위 N개)
+ * @param limit - 최대 반환 개수 (기본값: 50)
  */
-export async function fetchPopularTokens(
-  symbols: string[] = ['USDC', 'WETH', 'DAI']
+export async function fetchPopularTokensList(
+  limit: number = 50
 ): Promise<TokenInfo[]> {
   try {
-    const tokens: TokenInfo[] = [];
-    
-    for (const symbol of symbols) {
-      const foundTokens = await getTokens({ 
-        search: symbol, 
-        limit: '1' 
-      });
-      
-      // Check if response is an array
-      if (Array.isArray(foundTokens) && foundTokens.length > 0) {
-        tokens.push({
-          address: foundTokens[0].address as Address,
-          symbol: foundTokens[0].symbol,
-          name: foundTokens[0].name,
-          decimals: foundTokens[0].decimals,
-          image: foundTokens[0].image,
-          chainId: foundTokens[0].chainId,
-        });
-      }
+    // Base 네트워크의 인기 토큰들을 가져오기 위해 limit만 설정
+    const tokens = await getTokens({ 
+      limit: limit.toString()
+    });
+
+    // Check if response is an error or token array
+    if (Array.isArray(tokens)) {
+      return tokens.map((token) => ({
+        address: token.address as Address,
+        symbol: token.symbol,
+        name: token.name,
+        decimals: token.decimals,
+        image: token.image,
+        chainId: token.chainId,
+      }));
     }
     
-    return tokens;
+    // If it's an error, return empty array
+    return [];
   } catch (error) {
-    console.error('Failed to fetch popular tokens:', error);
+    console.error('Failed to fetch popular tokens list:', error);
     return [];
   }
 }

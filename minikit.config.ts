@@ -13,24 +13,31 @@ export const minikitConfig = {
     payload: "",
     signature: ""
   },
+  baseBuilder: {
+    ownerAddress: "0x..."
+  },
   miniapp: {
     version: "1",
-    name: "Cubey", 
-    subtitle: "Your AI Ad Companion", 
-    description: "Ads",
-    screenshotUrls: [`${ROOT_URL}/screenshot-portrait.png`],
-    iconUrl: `${ROOT_URL}/blue-icon.png`,
-    splashImageUrl: `${ROOT_URL}/blue-hero.png`,
-    splashBackgroundColor: "#000000",
+    name: "Flush", 
+    subtitle: "Multiswap your tokens at once", 
+    description: "Multiswap your tokens into one with a single transaction. Clean up dust tokens, consolidate your portfolio, and save on gas fees effortlessly.",
+    screenshotUrls: [
+      `${ROOT_URL}/screenshot.png`,
+      `${ROOT_URL}/screenshot-portrait.png`
+    ],
+    iconUrl: `${ROOT_URL}/icon.png`,
+    splashImageUrl: `${ROOT_URL}/splash.png`,
+    splashBackgroundColor: "#0052FF",
     homeUrl: ROOT_URL,
     webhookUrl: `${ROOT_URL}/api/webhook`,
-    primaryCategory: "social",
-    tags: ["marketing", "ads", "quickstart", "waitlist"],
-    heroImageUrl: `${ROOT_URL}/blue-hero.png`, 
-    tagline: "",
-    ogTitle: "",
-    ogDescription: "",
-    ogImageUrl: `${ROOT_URL}/blue-hero.png`,
+    primaryCategory: "finance",
+    tags: ["finance", "defi", "swap", "wallet", "base"],
+    heroImageUrl: `${ROOT_URL}/hero.png`, 
+    tagline: "Multiswap tokens in one tap",
+    ogTitle: "Flush - Multi-Swap Made Easy",
+    ogDescription: "Multi-swap all your Base tokens into one with a single transaction. The easiest way to consolidate your wallet.",
+    ogImageUrl: `${ROOT_URL}/hero.png`,
+    noindex: false
   },
 } as const;
 
