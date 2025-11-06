@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useMiniKit } from "@coinbase/onchainkit/minikit";
 import { TokenChip } from "@coinbase/onchainkit/token";
 import type { Token } from "@coinbase/onchainkit/token";
@@ -30,6 +30,9 @@ import { USDC_ADDRESS } from "../lib/constants";
 import { testOdosQuote, assembleOdosSwap, type OdosQuoteResponse } from "../lib/odos";
 import { checkTokenApproval, createApproveCall, checkBatchCapabilities } from "../lib/batchSwap";
 import { sendNotification, NotificationTemplates } from "../lib/notifications";
+import { TokenImage } from "../components/TokenImage";
+import { OnboardingModal } from "../components/OnboardingModal";
+import { BottomNavigation } from "../components/BottomNavigation";
 import type { Hex, Address as ViemAddress } from "viem";
 import { numberToHex } from "viem";
 import styles from "./page.module.css";
@@ -123,23 +126,26 @@ export default function Home() {
   }, [isConnected]);
 
   // Mark onboarding as seen when user connects wallet or closes onboarding
-  const handleOnboardingComplete = () => {
+  const handleOnboardingComplete = useCallback(() => {
     localStorage.setItem('flush-onboarding-seen', 'true');
     setShowOnboarding(false);
     setOnboardingStep(0);
-  };
+  }, []);
 
-  const handleOnboardingNext = () => {
-    if (onboardingStep < 2) {
-      setOnboardingStep(onboardingStep + 1);
-    } else {
-      handleOnboardingComplete();
-    }
-  };
+  const handleOnboardingNext = useCallback(() => {
+    setOnboardingStep((prev) => {
+      if (prev < 2) {
+        return prev + 1;
+      } else {
+        handleOnboardingComplete();
+        return prev;
+      }
+    });
+  }, [handleOnboardingComplete]);
 
-  const handleOnboardingSkip = () => {
+  const handleOnboardingSkip = useCallback(() => {
     handleOnboardingComplete();
-  };
+  }, [handleOnboardingComplete]);
 
   // Close output token selector when clicking outside
   useEffect(() => {
@@ -536,7 +542,7 @@ export default function Home() {
   // Mock data for swap history (will be replaced with actual data later)
   const totalSwappedAmount = 0; // TODO: Fetch from API
 
-  const handleTokenToggle = (symbol: string) => {
+  const handleTokenToggle = useCallback((symbol: string) => {
     setSelectedTokens((prev) => {
       const newSet = new Set(prev);
       if (newSet.has(symbol)) {
@@ -546,10 +552,10 @@ export default function Home() {
       }
       return newSet;
     });
-  };
+  }, []);
 
   // Test Odos Quote API v3 with selected tokens
-  const handleTestQuote = async () => {
+  const handleTestQuote = useCallback(async () => {
     if (!address || selectedTokens.size === 0) {
       alert('토큰을 선택해주세요');
       return;
@@ -700,10 +706,10 @@ export default function Home() {
     } finally {
       setIsTestingQuote(false);
     }
-  };
+  }, [address, selectedTokens, outputTokenAddress, slippageLimitPercent, allTokenBalances, tokenBalances, ethBalance]);
 
   // Assemble and execute swap transaction with approve checks
-  const handleExecuteSwap = async () => {
+  const handleExecuteSwap = useCallback(async () => {
     if (!quoteResult || !address) return;
 
     setIsAssembling(true);
@@ -864,7 +870,7 @@ export default function Home() {
     } finally {
       setIsAssembling(false);
     }
-  };
+  }, [quoteResult, address, slippageLimitPercent]);
 
   return (
     <div className={styles.container}>
@@ -891,9 +897,11 @@ export default function Home() {
               className={styles.outputTokenButton}
             >
               {outputToken.image && (
-                <img 
-                  src={outputToken.image} 
+                <TokenImage
+                  src={outputToken.image}
                   alt={outputToken.symbol}
+                  width={20}
+                  height={20}
                   className={styles.outputTokenImage}
                 />
               )}
@@ -919,9 +927,11 @@ export default function Home() {
                         className={`${styles.outputTokenOption} ${isSelected ? styles.outputTokenOptionSelected : ''}`}
                       >
                         {token.image && (
-                          <img 
-                            src={token.image} 
+                          <TokenImage
+                            src={token.image}
                             alt={token.symbol}
+                            width={32}
+                            height={32}
                             className={styles.outputTokenOptionImage}
                           />
                         )}
@@ -1057,7 +1067,13 @@ export default function Home() {
                         return (
                           <div key={idx} className={styles.swapPreviewTokenItem}>
                             {tokenInfo?.image && (
-                              <img src={tokenInfo.image} alt={symbol} className={styles.swapPreviewTokenImage} />
+                              <TokenImage
+                                src={tokenInfo.image}
+                                alt={symbol}
+                                width={32}
+                                height={32}
+                                className={styles.swapPreviewTokenImage}
+                              />
                             )}
                             <div className={styles.swapPreviewTokenInfo}>
                               <div className={styles.swapPreviewTokenAmount}>
@@ -1120,7 +1136,13 @@ export default function Home() {
                         return (
                           <div key={idx} className={styles.swapPreviewTokenItem}>
                             {tokenInfo?.image && (
-                              <img src={tokenInfo.image} alt={symbol} className={styles.swapPreviewTokenImage} />
+                              <TokenImage
+                                src={tokenInfo.image}
+                                alt={symbol}
+                                width={32}
+                                height={32}
+                                className={styles.swapPreviewTokenImage}
+                              />
                             )}
                             <div className={styles.swapPreviewTokenInfo}>
                               <div className={styles.swapPreviewTokenAmount}>
@@ -1521,72 +1543,12 @@ export default function Home() {
       )}
 
       {/* Onboarding Modal */}
-      {showOnboarding && !isConnected && (
-        <div className={styles.onboardingModal}>
-          <div className={styles.onboardingModalContent}>
-            {onboardingStep === 0 && (
-              <div className={styles.onboardingScreen}>
-                <div className={styles.onboardingIcon}>💎</div>
-                <h2 className={styles.onboardingTitle}>Welcome to Flush</h2>
-                <p className={styles.onboardingDescription}>
-                  Consolidate your tokens in one transaction
-                </p>
-                <div className={styles.onboardingImagePlaceholder}>
-                  <div className={styles.onboardingImageIcon}>🔄</div>
-                </div>
-              </div>
-            )}
-            {onboardingStep === 1 && (
-              <div className={styles.onboardingScreen}>
-                <div className={styles.onboardingIcon}>⚡</div>
-                <h2 className={styles.onboardingTitle}>Save on Gas</h2>
-                <p className={styles.onboardingDescription}>
-                  Batch multiple swaps into a single transaction and reduce gas fees
-                </p>
-                <div className={styles.onboardingImagePlaceholder}>
-                  <div className={styles.onboardingImageIcon}>💰</div>
-                </div>
-              </div>
-            )}
-            {onboardingStep === 2 && (
-              <div className={styles.onboardingScreen}>
-                <div className={styles.onboardingIcon}>🎯</div>
-                <h2 className={styles.onboardingTitle}>Get Started</h2>
-                <p className={styles.onboardingDescription}>
-                  Connect your wallet to see your balances and start swapping
-                </p>
-                <div className={styles.onboardingImagePlaceholder}>
-                  <div className={styles.onboardingImageIcon}>🔗</div>
-                </div>
-              </div>
-            )}
-            <div className={styles.onboardingFooter}>
-              <div className={styles.onboardingDots}>
-                {[0, 1, 2].map((step) => (
-                  <div
-                    key={step}
-                    className={`${styles.onboardingDot} ${onboardingStep === step ? styles.onboardingDotActive : ''}`}
-                  />
-                ))}
-              </div>
-              <div className={styles.onboardingActions}>
-                <button
-                  onClick={handleOnboardingSkip}
-                  className={styles.onboardingSkipButton}
-                >
-                  Skip
-                </button>
-                <button
-                  onClick={handleOnboardingNext}
-                  className={styles.onboardingNextButton}
-                >
-                  {onboardingStep === 2 ? 'Get Started' : 'Next'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <OnboardingModal
+        showOnboarding={showOnboarding && !isConnected}
+        onboardingStep={onboardingStep}
+        onNext={handleOnboardingNext}
+        onSkip={handleOnboardingSkip}
+      />
 
       {/* Body - Tab Content */}
       <div className={styles.body}>
@@ -1730,31 +1692,10 @@ export default function Home() {
 
       {/* Bottom Navigation Bar */}
       {isConnected && (
-        <div className={styles.bottomNav}>
-          <button
-            className={`${styles.bottomNavItem} ${activeTab === 'balance' ? styles.bottomNavItemActive : ''}`}
-            onClick={() => setActiveTab('balance')}
-            aria-label="Balance"
-          >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M12 6V12L16 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            <span className={styles.bottomNavLabel}>Balance</span>
-          </button>
-          <button
-            className={`${styles.bottomNavItem} ${activeTab === 'swapHistory' ? styles.bottomNavItemActive : ''}`}
-            onClick={() => setActiveTab('swapHistory')}
-            aria-label="Swap History"
-          >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M3 3H21L20 21H4L3 3Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M8 12L12 16L16 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M12 8V16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            <span className={styles.bottomNavLabel}>History</span>
-          </button>
-        </div>
+        <BottomNavigation
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+        />
       )}
     </div>
   );
