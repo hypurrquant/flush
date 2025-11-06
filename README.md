@@ -1,9 +1,23 @@
-# Waitlist Mini App Quickstart
+# Token Swap Mini App
 
-This is a demo Mini App application built using OnchainKit and the Farcaster SDK. Build a waitlist sign-up mini app for your company that can be published to the Base app and Farcaster. 
+A Base mini app that allows users to view their ERC20 token balances and swap multiple tokens to USDC using batch transactions.
 
-> [!IMPORTANT]  
-> Before interacting with this demo, please review our [disclaimer](#disclaimer) — there are **no official tokens or apps** associated with Cubey, Base, or Coinbase.
+## Features
+
+- **ERC20 Token Balance Display**: View balances for popular tokens on Base network (USDC, WETH, DAI)
+- **Batch Token Swapping**: Swap multiple ERC20 tokens to USDC in a single transaction (demo mode)
+- **Swap Tracking**: Track total swap amounts and fees using Supabase
+- **Rewards System**: Calculate and display rewards based on swap volume (10% of fees)
+- **Modern UI**: Clean, responsive design optimized for mobile with fixed bottom button
+
+## Overview
+
+This mini app demonstrates:
+1. Connecting to user's wallet via OnchainKit
+2. Fetching ERC20 token balances
+3. Displaying total swap history
+4. Calculating rewards based on swap activity
+5. Preparing batch swap transactions (demo implementation)
 
 ## Prerequisites
 
