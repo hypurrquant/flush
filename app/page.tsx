@@ -55,11 +55,12 @@ export default function Home() {
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
   const [selectedTokens, setSelectedTokens] = useState<Set<string>>(new Set());
+  const [tokenAmounts, setTokenAmounts] = useState<Map<string, number>>(new Map()); // percentage 0-100
   const [tokenList, setTokenList] = useState<TokenInfo[]>([]);
   const [tokenBalances, setTokenBalances] = useState<Map<string, bigint>>(new Map());
   const [tokenPrices, setTokenPrices] = useState<Map<string, number>>(new Map());
   const [isLoadingTokens, setIsLoadingTokens] = useState(false);
-  const [hideDustTokens, setHideDustTokens] = useState(true); // 기본값: dust token 숨김
+  const [hideDustTokens, setHideDustTokens] = useState(true);
   const [activeTab, setActiveTab] = useState<'balance' | 'swapHistory' | 'rewards' | 'hideSmallBalance'>('balance');
   const [isTestingQuote, setIsTestingQuote] = useState(false);
   const [quoteResult, setQuoteResult] = useState<ZeroExCombinedQuote | null>(null);
@@ -101,11 +102,11 @@ export default function Home() {
     canRetry: boolean;
   } | null>(null);
   
-  // Odos API 설정
+  // Swap API settings
   const [slippageLimitPercent, setSlippageLimitPercent] = useState(0.5);
-  const [outputTokenAddress, setOutputTokenAddress] = useState<string>(USDC_ADDRESS); // 기본값: USDC
-  
-  const DUST_THRESHOLD = 1; // $1 미만을 dust로 간주
+  const [outputTokenAddress, setOutputTokenAddress] = useState<string>(USDC_ADDRESS); // default: USDC
+
+  const DUST_THRESHOLD = 1; // Consider tokens under $1 as dust
 
   // Initialize the miniapp
   useEffect(() => {
@@ -576,17 +577,38 @@ export default function Home() {
       const newSet = new Set(prev);
       if (newSet.has(symbol)) {
         newSet.delete(symbol);
+        // Remove from tokenAmounts when deselected
+        setTokenAmounts((prevAmounts) => {
+          const newAmounts = new Map(prevAmounts);
+          newAmounts.delete(symbol);
+          return newAmounts;
+        });
       } else {
         newSet.add(symbol);
+        // Set default 100% when selected
+        setTokenAmounts((prevAmounts) => {
+          const newAmounts = new Map(prevAmounts);
+          newAmounts.set(symbol, 100);
+          return newAmounts;
+        });
       }
       return newSet;
+    });
+  }, []);
+
+  // Update token amount percentage
+  const handleTokenAmountChange = useCallback((symbol: string, percentage: number) => {
+    setTokenAmounts((prev) => {
+      const newAmounts = new Map(prev);
+      newAmounts.set(symbol, Math.max(0, Math.min(100, percentage)));
+      return newAmounts;
     });
   }, []);
 
   // Test Odos Quote API v3 with selected tokens
   const handleTestQuote = useCallback(async () => {
     if (!address || selectedTokens.size === 0) {
-      alert('토큰을 선택해주세요');
+      alert('Please select tokens to swap');
       return;
     }
 
@@ -605,7 +627,7 @@ export default function Home() {
           // Get balance from tokenBalances map or ETH balance
           let balance: bigint;
           let tokenAddress: string;
-          
+
           if (token.address === "0x0000000000000000000000000000000000000000") {
             // ETH - use WETH address for Odos API
             balance = ethBalance?.value || 0n;
@@ -615,18 +637,22 @@ export default function Home() {
             tokenAddress = token.address;
           }
 
+          // Apply percentage from tokenAmounts (default 100%)
+          const percentage = tokenAmounts.get(token.symbol) || 100;
+          balance = (balance * BigInt(percentage)) / 100n;
+
           const normalizedAddress = tokenAddress.toLowerCase();
           
-          // 출력 토큰과 같은 토큰은 제외
+          // Exclude tokens that are the same as output token
           if (normalizedAddress === outputTokenAddressLower) {
             const outputTokenSymbol = allTokenBalances.find(
               t => t.address.toLowerCase() === outputTokenAddressLower
-            )?.symbol || '출력 토큰';
-            console.warn(`${outputTokenSymbol}는 출력 토큰이므로 입력에서 제외됩니다`);
+            )?.symbol || 'output token';
+            console.warn(`${outputTokenSymbol} is excluded from input as it is the output token`);
             return;
           }
           
-          // 중복 제거: 같은 토큰 주소가 있으면 잔액을 합산
+          // Deduplicate: sum balances for the same token address
           if (tokenDataMap.has(normalizedAddress)) {
             const existingBalance = tokenDataMap.get(normalizedAddress) || 0n;
             tokenDataMap.set(normalizedAddress, existingBalance + balance);
@@ -635,7 +661,7 @@ export default function Home() {
           }
         });
 
-      // Map을 배열로 변환하고 잔액이 0보다 큰 것만 필터링
+      // Convert Map to array and filter only balances greater than 0
       const selectedTokenData = Array.from(tokenDataMap.entries())
         .filter(([_, amount]) => amount > 0n)
         .map(([tokenAddress, amount]) => ({
@@ -646,17 +672,17 @@ export default function Home() {
       if (selectedTokenData.length === 0) {
         const outputTokenSymbol = allTokenBalances.find(
           t => t.address.toLowerCase() === outputTokenAddressLower
-        )?.symbol || '출력 토큰';
-        
+        )?.symbol || 'output token';
+
         const hasOutputTokenOnly = Array.from(selectedTokens).every(symbol => {
           const token = allTokenBalances.find(t => t.symbol === symbol);
           return token && token.address.toLowerCase() === outputTokenAddressLower;
         });
-        
+
         if (hasOutputTokenOnly) {
-          throw new Error(`${outputTokenSymbol}는 출력 토큰이므로 스왑할 수 없습니다. 다른 토큰을 선택해주세요.`);
+          throw new Error(`${outputTokenSymbol} is the output token and cannot be swapped. Please select other tokens.`);
         }
-        throw new Error('스왑할 토큰이 없습니다');
+        throw new Error('No tokens to swap');
       }
 
       console.log('Testing 0x Quote API with inputTokens:', selectedTokenData);
@@ -701,9 +727,10 @@ export default function Home() {
           // 0x already provides the allowanceTarget in the quote
           const allowanceTarget = quote.allowanceTarget as ViemAddress;
 
-          // Check each token
-          const approvalPromises = quote.inTokens.map(async (tokenAddress) => {
+          // Check each token with actual swap amount
+          const approvalPromises = quote.inTokens.map(async (tokenAddress, index) => {
             const tokenAddr = tokenAddress as ViemAddress;
+            const amount = BigInt(quote.inAmounts?.[index] || '0');
 
             // Skip ETH
             if (tokenAddr.toLowerCase() === '0x0000000000000000000000000000000000000000') {
@@ -711,9 +738,8 @@ export default function Home() {
               return;
             }
 
-            // Check with max uint256 to see if unlimited approval exists
-            const MAX_UINT256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
-            const approval = await checkTokenApproval(tokenAddr, address as ViemAddress, MAX_UINT256, allowanceTarget);
+            // Check with actual swap amount
+            const approval = await checkTokenApproval(tokenAddr, address as ViemAddress, amount, allowanceTarget);
             statusMap.set(tokenAddr.toLowerCase(), approval);
           });
 
@@ -740,7 +766,7 @@ export default function Home() {
       }
     } catch (error) {
       console.error('Quote API test error:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Quote API 호출 실패';
+      const errorMessage = error instanceof Error ? error.message : 'Quote API call failed';
       setQuoteError(errorMessage);
     } finally {
       setIsTestingQuote(false);
@@ -783,7 +809,7 @@ export default function Home() {
       return calls;
     } catch (error) {
       console.error('Transaction preparation error:', error);
-      const errorMessage = error instanceof Error ? error.message : '트랜잭션 준비 실패';
+      const errorMessage = error instanceof Error ? error.message : 'Transaction preparation failed';
       setQuoteError(errorMessage);
       throw error;
     } finally {
@@ -822,7 +848,7 @@ export default function Home() {
             <button
               onClick={() => setShowSettings(!showSettings)}
               className={styles.settingsButton}
-              title="설정"
+              title="Settings"
             >
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M10 12.5C11.3807 12.5 12.5 11.3807 12.5 10C12.5 8.61929 11.3807 7.5 10 7.5C8.61929 7.5 7.5 8.61929 7.5 10C7.5 11.3807 8.61929 12.5 10 12.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -852,7 +878,7 @@ export default function Home() {
         <div className={styles.settingsModal} onClick={() => setShowSettings(false)}>
           <div className={styles.settingsModalContent} onClick={(e) => e.stopPropagation()}>
             <div className={styles.settingsHeader}>
-              <h2>스왑 설정</h2>
+              <h2>Swap Settings</h2>
               <button onClick={() => setShowSettings(false)} className={styles.closeButton}>
                 ×
               </button>
@@ -893,9 +919,9 @@ export default function Home() {
               {/* Slippage Tolerance */}
               <div className={styles.settingsItem}>
                 <label className={styles.settingsLabel}>
-                  슬리피지 허용 범위 (%)
+                  Slippage Tolerance (%)
                   <span className={styles.settingsDescription}>
-                    가격 변동 허용 범위입니다. 기본값: 0.5%
+                    Allowed price change. Default: 0.5%
                   </span>
                 </label>
                 <input
@@ -920,7 +946,7 @@ export default function Home() {
         }}>
           <div className={styles.settingsModalContent} onClick={(e) => e.stopPropagation()}>
             <div className={styles.settingsHeader}>
-              <h2>✓ Quote 성공!</h2>
+              <h2>✓ Quote Success!</h2>
               <button onClick={() => {
                 setQuoteResult(null);
               }} className={styles.closeButton}>
@@ -932,16 +958,16 @@ export default function Home() {
               {/* Approval Status & Swap Preview */}
               {isCheckingApprovals ? (
                 <div className={styles.quoteInfoRow}>
-                  <div className={styles.quoteInfoLabel}>Approve 상태 확인 중...</div>
+                  <div className={styles.quoteInfoLabel}>Checking approval status...</div>
                   <div className={styles.quoteInfoValue}>⏳</div>
                 </div>
               ) : quoteResult.inTokens && quoteResult.inTokens.length > 0 && (
                 <div className={styles.swapPreviewSection}>
-                  <div className={styles.swapPreviewHeader}>스왑 미리보기</div>
+                  <div className={styles.swapPreviewHeader}>Swap Preview</div>
                   
                   {/* Input Tokens */}
                   <div className={styles.swapPreviewTokens}>
-                    <div className={styles.swapPreviewLabel}>입력</div>
+                    <div className={styles.swapPreviewLabel}>Input</div>
                     <div className={styles.swapPreviewTokenList}>
                       {quoteResult.inTokens.map((tokenAddress, idx) => {
                         const tokenAddr = tokenAddress.toLowerCase();
@@ -992,7 +1018,7 @@ export default function Home() {
                                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ marginRight: '0.25rem' }}>
                                     <path d="M7 4.66667V7M7 9.33333H7.01167M12.8333 7C12.8333 10.2217 10.2217 12.8333 7 12.8333C3.77833 12.8333 1.16667 10.2217 1.16667 7C1.16667 3.77833 3.77833 1.16667 7 1.16667C10.2217 1.16667 12.8333 3.77833 12.8333 7Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                                   </svg>
-                                  Approve 필요
+                                  Needs Approval
                                 </span>
                               )}
                             </div>
@@ -1011,7 +1037,7 @@ export default function Home() {
                   
                   {/* Output Tokens */}
                   <div className={styles.swapPreviewTokens}>
-                    <div className={styles.swapPreviewLabel}>출력</div>
+                    <div className={styles.swapPreviewLabel}>Output</div>
                     <div className={styles.swapPreviewTokenList}>
                       {quoteResult.outTokens.map((tokenAddress, idx) => {
                         const tokenAddr = tokenAddress.toLowerCase();
@@ -1041,7 +1067,7 @@ export default function Home() {
                                 {(amountNum || 0).toLocaleString('en-US', { maximumFractionDigits: 6 })} {symbol}
                               </div>
                               <div className={styles.swapPreviewTokenSubtext}>
-                                최소: {(minReceived || 0).toLocaleString('en-US', { maximumFractionDigits: 6 })} {symbol}
+                                Min: {(minReceived || 0).toLocaleString('en-US', { maximumFractionDigits: 6 })} {symbol}
                               </div>
                             </div>
                             <div className={styles.swapPreviewTokenStatus}>
@@ -1049,7 +1075,7 @@ export default function Home() {
                                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ marginRight: '0.25rem' }}>
                                   <path d="M11.6667 3.5L5.25 9.91667L2.33333 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                                 </svg>
-                                수령 예정
+                                To Receive
                               </span>
                             </div>
                           </div>
@@ -1066,14 +1092,14 @@ export default function Home() {
                       
                       return (
                         <div className={styles.swapPreviewSummaryRow}>
-                          <div className={styles.swapPreviewSummaryLabel}>예상 트랜잭션</div>
+                          <div className={styles.swapPreviewSummaryLabel}>Expected Transactions</div>
                           <div className={styles.swapPreviewSummaryValue}>
                             {needsApprovalCount > 0 ? (
                               <span>
-                                {needsApprovalCount}개 approve + 1개 swap = 총 {totalTransactions}개
+                                {needsApprovalCount} approve + 1 swap = {totalTransactions} total
                               </span>
                             ) : (
-                              <span style={{ color: '#86efac' }}>1개 swap만 실행</span>
+                              <span style={{ color: '#86efac' }}>1 swap only</span>
                             )}
                           </div>
                         </div>
@@ -1082,7 +1108,7 @@ export default function Home() {
                     
                     {quoteResult.gasEstimate != null && quoteResult.gasEstimate > 0 && (
                       <div className={styles.swapPreviewSummaryRow}>
-                        <div className={styles.swapPreviewSummaryLabel}>예상 가스</div>
+                        <div className={styles.swapPreviewSummaryLabel}>Estimated Gas</div>
                         <div className={styles.swapPreviewSummaryValue}>
                           {quoteResult.gasEstimate.toLocaleString()} units
                         </div>
@@ -1129,7 +1155,7 @@ export default function Home() {
               
               {/* Additional Details (Collapsible) */}
               <details className={styles.quoteDetails}>
-                <summary className={styles.quoteDetailsSummary}>더 보기</summary>
+                <summary className={styles.quoteDetailsSummary}>More Details</summary>
                 <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                   {quoteResult.gasEstimate != null && (
                     <div className={styles.quoteInfoRow}>
@@ -1167,7 +1193,7 @@ export default function Home() {
                     color: 'rgba(255, 255, 255, 0.6)',
                     textAlign: 'center'
                   }}>
-                    지갑 정보 확인 중...
+                    Checking wallet info...
                   </div>
                 ) : walletType === 'coinbase-smart-wallet' && batchSupported === true ? (
                   <div style={{ 
@@ -1178,7 +1204,7 @@ export default function Home() {
                     fontSize: '0.75rem',
                     color: '#86efac'
                   }}>
-                    ✅ Smart Wallet 감지됨 - 배치 트랜잭션 및 가스비 스폰서링 지원
+                    ✅ Smart Wallet detected - Batch transactions and gas sponsorship supported
                   </div>
                 ) : walletType === 'eoa' && batchSupported === false ? (
                   <div style={{ 
@@ -1189,7 +1215,7 @@ export default function Home() {
                     fontSize: '0.75rem',
                     color: '#fbbf24'
                   }}>
-                    ⚠️ EOA 지갑 - 배치 트랜잭션 미지원. Approve와 Swap이 순차적으로 실행됩니다.
+                    ⚠️ EOA Wallet - Batch transactions not supported. Approve and Swap will execute sequentially.
                   </div>
                 ) : walletType === 'eoa' && batchSupported === true ? (
                   <div style={{ 
@@ -1200,7 +1226,7 @@ export default function Home() {
                     fontSize: '0.75rem',
                     color: '#86efac'
                   }}>
-                    ✅ EOA 지갑 - 배치 트랜잭션 지원됨
+                    ✅ EOA Wallet - Batch transactions supported
                   </div>
                 ) : batchSupported === false ? (
                   <div style={{ 
@@ -1211,7 +1237,7 @@ export default function Home() {
                     fontSize: '0.75rem',
                     color: '#fbbf24'
                   }}>
-                    ⚠️ 배치 트랜잭션 미지원 - Approve와 Swap이 별도로 실행될 수 있습니다
+                    ⚠️ Batch transactions not supported - Approve and Swap may execute separately
                   </div>
                 ) : batchSupported === true ? (
                   <div style={{ 
@@ -1222,7 +1248,7 @@ export default function Home() {
                     fontSize: '0.75rem',
                     color: '#86efac'
                   }}>
-                    ✅ 배치 트랜잭션 지원됨 - Approve와 Swap이 한 번에 실행됩니다
+                    ✅ Batch transactions supported - Approve and Swap will execute together
                   </div>
                 ) : null}
                 
@@ -1257,7 +1283,7 @@ export default function Home() {
                             className={styles.swapButton}
                             style={{ flex: 1 }}
                           >
-                            다시 시도
+                            Try Again
                           </button>
                         ) : (
                           <>
@@ -1271,7 +1297,7 @@ export default function Home() {
                               className={styles.swapButton}
                               style={{ flex: 1, background: '#fbbf24', color: '#000' }}
                             >
-                              경로 재탐색
+                              Find New Route
                             </button>
                             <button
                               onClick={() => {
@@ -1281,7 +1307,7 @@ export default function Home() {
                               className={styles.swapButton}
                               style={{ flex: 1 }}
                             >
-                              다시 시도
+                              Try Again
                             </button>
                           </>
                         )}
@@ -1289,7 +1315,7 @@ export default function Home() {
                     );
                   }
                   
-                  // If simulation failed, show "경로 재탐색" button
+                  // If simulation failed, show "Find New Route" button
                   if (simulationResult === 'failed') {
                     return (
                       <button
@@ -1303,7 +1329,7 @@ export default function Home() {
                         className={styles.swapButton}
                         style={{ background: '#fbbf24', color: '#000' }}
                       >
-                        경로 재탐색
+                        Find New Route
                       </button>
                     );
                   }
@@ -1332,7 +1358,7 @@ export default function Home() {
                           const approval = await checkTokenApproval(
                             tokenAddress,
                             address as ViemAddress,
-                            BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'),
+                            amount,
                             allowanceTarget
                           );
 
@@ -1384,9 +1410,9 @@ export default function Home() {
                           }
                         }}
                       >
-                        <TransactionButton 
-                          className={styles.swapButton} 
-                          text={isApproving ? 'Approve 실행 중...' : `${needsApprovalCount}개 Approve 실행`}
+                        <TransactionButton
+                          className={styles.swapButton}
+                          text={isApproving ? 'Approving...' : `Approve ${needsApprovalCount} token${needsApprovalCount > 1 ? 's' : ''}`}
                         />
                         <TransactionStatus>
                           <TransactionStatusLabel />
@@ -1400,13 +1426,13 @@ export default function Home() {
                   if (isSimulating) {
                     return (
                       <button className={styles.swapButton} disabled>
-                        시뮬레이션 중...
+                        Simulating...
                       </button>
                     );
                   }
-                  
+
                   // Show swap button - clicking will trigger simulation first
-                  const buttonText = '스왑 실행하기';
+                  const buttonText = 'Execute Swap';
 
                   // Prepare swap calls (0x quote already includes validated transaction data)
                   const prepareSwapCallsWithSimulation = async (): Promise<Array<{ to: ViemAddress; value: bigint; data: Hex }>> => {
@@ -1671,31 +1697,31 @@ export default function Home() {
                           
                           // Parse error message
                           const statusData = status.statusData as { error?: { message?: string; code?: string | number } };
-                          const errorMessage = statusData?.error?.message || '트랜잭션이 실패했습니다.';
+                          const errorMessage = statusData?.error?.message || 'Transaction failed.';
                           const errorCode = statusData?.error?.code;
-                          
+
                           // Check if error is due to simulation failure
-                          const isSimulationError = errorMessage.includes('Simulation failed') || 
+                          const isSimulationError = errorMessage.includes('Simulation failed') ||
                                                     errorMessage.includes('New quote fetched');
-                          
+
                           // Determine if user can retry
                           let canRetry = true;
                           let userFriendlyMessage = errorMessage;
-                          
+
                           // Handle specific error cases
                           if (errorCode === 4001 || errorMessage.includes('User rejected')) {
-                            userFriendlyMessage = '트랜잭션이 사용자에 의해 취소되었습니다.';
+                            userFriendlyMessage = 'Transaction was cancelled by user.';
                             canRetry = true;
                           } else if (errorCode === -32603 || errorMessage.includes('execution reverted')) {
-                            userFriendlyMessage = '트랜잭션 실행이 실패했습니다. 잔액이나 승인 상태를 확인해주세요.';
+                            userFriendlyMessage = 'Transaction execution failed. Please check your balance or approval status.';
                             canRetry = true;
                           } else if (errorMessage.includes('insufficient funds') || errorMessage.includes('gas')) {
-                            userFriendlyMessage = '가스비가 부족합니다. 잔액을 확인해주세요.';
+                            userFriendlyMessage = 'Insufficient gas. Please check your balance.';
                             canRetry = true;
                           } else if (isSimulationError) {
                             // Simulation failed - new quote was already fetched
                             setSimulationResult(null);
-                            userFriendlyMessage = '경로 검증 실패. 새로운 경로를 찾았습니다. 다시 시도해주세요.';
+                            userFriendlyMessage = 'Route validation failed. New route found. Please try again.';
                             canRetry = true;
                           }
                           
@@ -1763,7 +1789,7 @@ export default function Home() {
         <div className={styles.settingsModal} onClick={() => setSwapSuccessData(null)}>
           <div className={styles.settingsModalContent} onClick={(e) => e.stopPropagation()}>
             <div className={styles.settingsHeader}>
-              <h2 style={{ color: '#86efac' }}>✓ 스왑 성공!</h2>
+              <h2 style={{ color: '#86efac' }}>✓ Swap Successful!</h2>
               <button onClick={() => setSwapSuccessData(null)} className={styles.closeButton}>
                 ×
               </button>
@@ -1774,7 +1800,7 @@ export default function Home() {
                 {/* Input Tokens */}
                 <div>
                   <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.6)', marginBottom: '0.75rem' }}>
-                    보낸 토큰
+                    Sent Tokens
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                     {swapSuccessData.inputTokens.map((token, index) => (
@@ -1815,7 +1841,7 @@ export default function Home() {
                 {/* Output Tokens */}
                 <div>
                   <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.6)', marginBottom: '0.75rem' }}>
-                    받은 토큰
+                    Received Tokens
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                     {swapSuccessData.outputTokens.map((token, index) => (
@@ -1853,8 +1879,8 @@ export default function Home() {
         </div>
       )}
 
-      {/* Hide Small Balance Toggle - moved to header area */}
-      {isConnected && allTokenBalances.length > 0 && (
+      {/* Hide Small Balance Toggle - only show on Balance tab */}
+      {isConnected && activeTab === 'balance' && allTokenBalances.length > 0 && (
         <div className={styles.dustFilterHeader}>
           <label className={styles.toggleContainer}>
             <input
@@ -1870,7 +1896,69 @@ export default function Home() {
 
       {/* Body - Tab Content */}
       <div className={styles.body}>
-        {activeTab === 'rewards' && isConnected ? (
+        {/* Landing page for non-connected users */}
+        {!isConnected ? (
+          <div className={styles.landingContainer}>
+            {/* Hero Section */}
+            <div className={styles.landingHero}>
+              <div className={styles.landingLogo}>🚽</div>
+              <h1 className={styles.landingTitle}>Flush</h1>
+              <p className={styles.landingTagline}>
+                Swap all your tokens to USDC in one click
+              </p>
+            </div>
+
+            {/* Features Section */}
+            <div className={styles.landingFeatures}>
+              <div className={styles.featureCard}>
+                <div className={styles.featureIcon}>⚡</div>
+                <h3 className={styles.featureTitle}>Batch Swap</h3>
+                <p className={styles.featureDesc}>
+                  Select multiple tokens and swap them all at once. Save time and gas fees.
+                </p>
+              </div>
+
+              <div className={styles.featureCard}>
+                <div className={styles.featureIcon}>🧹</div>
+                <h3 className={styles.featureTitle}>Clean Dust</h3>
+                <p className={styles.featureDesc}>
+                  Get rid of small token balances cluttering your wallet.
+                </p>
+              </div>
+
+              <div className={styles.featureCard}>
+                <div className={styles.featureIcon}>💰</div>
+                <h3 className={styles.featureTitle}>Best Rates</h3>
+                <p className={styles.featureDesc}>
+                  Powered by 0x DEX aggregator for optimal swap routing.
+                </p>
+              </div>
+            </div>
+
+            {/* CTA Section */}
+            <div className={styles.landingCTA}>
+              <p className={styles.landingCTAText}>
+                Connect your wallet to get started
+              </p>
+              <div className={styles.landingWalletButton}>
+                <Wallet>
+                  <ConnectWallet>
+                    <Avatar className="h-6 w-6" />
+                    <Name />
+                  </ConnectWallet>
+                  <WalletDropdown>
+                    <Identity className="px-4 pt-3 pb-2" hasCopyAddressOnClick>
+                      <Avatar />
+                      <Name />
+                      <EthBalance />
+                    </Identity>
+                    <WalletDropdownDisconnect />
+                  </WalletDropdown>
+                </Wallet>
+              </div>
+            </div>
+          </div>
+        ) : activeTab === 'rewards' ? (
           <RewardsTab address={address} />
         ) : activeTab === 'balance' ? (
           <>
@@ -1881,13 +1969,13 @@ export default function Home() {
               </div>
             ) : allTokenBalances.length === 0 ? (
               <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
-                보유한 토큰이 없습니다
+                No tokens found
               </div>
             ) : filteredTokenBalances.length === 0 ? (
               <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
-                {hideDustTokens 
-                  ? `Dust token ($${DUST_THRESHOLD} 미만)이 ${dustTokenCount}개 있습니다. 필터를 해제하여 확인하세요.`
-                  : '표시할 토큰이 없습니다'}
+                {hideDustTokens
+                  ? `${dustTokenCount} dust token(s) under $${DUST_THRESHOLD}. Disable filter to view.`
+                  : 'No tokens to display'}
               </div>
             ) : (
               <div className={styles.tokenList}>
@@ -1895,53 +1983,112 @@ export default function Home() {
                   const isSelected = selectedTokens.has(token.symbol);
                   const tokenForChip = tokensForChip[index];
                   const isUSDC = token.address.toLowerCase() === USDC_ADDRESS.toLowerCase();
-                  const isDisabled = isUSDC; // USDC는 출력 토큰이므로 선택 불가
-                  
+                  const isOutputToken = token.address.toLowerCase() === outputTokenAddress.toLowerCase();
+                  const isDisabled = isOutputToken;
+                  const percentage = tokenAmounts.get(token.symbol) || 100;
+                  const adjustedBalance = parseFloat(token.balanceFormatted) * (percentage / 100);
+                  const adjustedUsdValue = (token.usdValue || 0) * (percentage / 100);
+
                   return (
                     <div
                       key={token.address}
                       className={`${styles.tokenItem} ${isSelected ? styles.tokenItemSelected : ''} ${isDisabled ? styles.tokenItemDisabled : ''}`}
-                      onClick={() => !isDisabled && handleTokenToggle(token.symbol)}
-                      style={{ 
+                      style={{
                         opacity: isDisabled ? 0.5 : 1,
-                        cursor: isDisabled ? 'not-allowed' : 'pointer'
+                        cursor: isDisabled ? 'not-allowed' : 'pointer',
+                        flexDirection: 'column',
+                        alignItems: 'stretch',
+                        gap: '0.5rem'
                       }}
                     >
-                      <div className={styles.tokenInfo}>
-                        <TokenChip 
-                          token={tokenForChip}
-                          onClick={() => !isDisabled && handleTokenToggle(token.symbol)}
-                        />
-                        <div className={styles.tokenName}>
-                          {token.name}
-                          {isDisabled && <span style={{ fontSize: '0.7rem', color: 'rgba(255, 255, 255, 0.5)', marginLeft: '0.25rem' }}>(출력 토큰)</span>}
-                        </div>
-                      </div>
-                      <div className={styles.tokenBalanceSection}>
-                        <div className={styles.tokenBalance}>
-                          {token.balanceFormatted} {token.symbol}
-                        </div>
-                        {token.usdValue !== undefined && (
-                          <div className={styles.tokenUsdtValue}>
-                            ${parseFloat(token.usdValue.toString()).toFixed(2)}
-                          </div>
-                        )}
-                      </div>
                       <div
-                        className={`${styles.tokenCheckboxMinimal} ${isSelected ? styles.tokenCheckboxMinimalSelected : ''}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (!isDisabled) {
-                            handleTokenToggle(token.symbol);
-                          }
-                        }}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}
+                        onClick={() => !isDisabled && handleTokenToggle(token.symbol)}
                       >
-                        {isSelected && (
-                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                            <path d="M13.3333 4L6 11.3333L2.66667 8" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                        )}
+                        <div className={styles.tokenInfo}>
+                          <TokenChip
+                            token={tokenForChip}
+                            onClick={() => !isDisabled && handleTokenToggle(token.symbol)}
+                          />
+                          <div className={styles.tokenName}>
+                            {token.name}
+                            {isDisabled && <span style={{ fontSize: '0.7rem', color: 'rgba(255, 255, 255, 0.5)', marginLeft: '0.25rem' }}>(Output)</span>}
+                          </div>
+                        </div>
+                        <div className={styles.tokenBalanceSection}>
+                          <div className={styles.tokenBalance}>
+                            {isSelected && percentage < 100
+                              ? `${adjustedBalance.toFixed(4)}/${token.balanceFormatted}`
+                              : token.balanceFormatted} {token.symbol}
+                          </div>
+                          {token.usdValue !== undefined && (
+                            <div className={styles.tokenUsdtValue}>
+                              {isSelected && percentage < 100
+                                ? `$${adjustedUsdValue.toFixed(2)}/$${token.usdValue.toFixed(2)}`
+                                : `$${token.usdValue.toFixed(2)}`}
+                              {isSelected && percentage < 100 && (
+                                <span style={{ color: 'rgba(255,255,255,0.4)', marginLeft: '4px' }}>
+                                  ({percentage}%)
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <div
+                          className={`${styles.tokenCheckboxMinimal} ${isSelected ? styles.tokenCheckboxMinimalSelected : ''}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!isDisabled) {
+                              handleTokenToggle(token.symbol);
+                            }
+                          }}
+                        >
+                          {isSelected && (
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                              <path d="M13.3333 4L6 11.3333L2.66667 8" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                          )}
+                        </div>
                       </div>
+                      {/* Amount selector - only show when selected */}
+                      {isSelected && (
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            paddingLeft: '0.5rem',
+                            marginTop: '0.25rem'
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div style={{ display: 'flex', gap: '0.25rem' }}>
+                            {[25, 50, 75, 100].map((pct) => (
+                              <button
+                                key={pct}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleTokenAmountChange(token.symbol, pct);
+                                }}
+                                style={{
+                                  padding: '0.25rem 0.5rem',
+                                  fontSize: '0.75rem',
+                                  fontWeight: percentage === pct ? 600 : 400,
+                                  background: percentage === pct ? 'rgba(147, 51, 234, 0.3)' : 'rgba(255,255,255,0.1)',
+                                  border: percentage === pct ? '1px solid rgba(147, 51, 234, 0.5)' : '1px solid rgba(255,255,255,0.2)',
+                                  borderRadius: '6px',
+                                  color: 'white',
+                                  cursor: 'pointer',
+                                  minWidth: '40px',
+                                  transition: 'all 0.2s ease'
+                                }}
+                              >
+                                {pct}%
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -2024,11 +2171,11 @@ export default function Home() {
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <div className={styles.outputTokenDropdownHeader}>출력 토큰 선택</div>
+                    <div className={styles.outputTokenDropdownHeader}>Select Output Token</div>
                     <div className={styles.outputTokenList}>
                       {availableOutputTokens.length === 0 ? (
                         <div style={{ padding: '1rem', textAlign: 'center', color: 'rgba(255, 255, 255, 0.5)' }}>
-                          토큰을 불러오는 중...
+                          Loading tokens...
                         </div>
                       ) : (
                         availableOutputTokens.map((token) => {
@@ -2086,13 +2233,14 @@ export default function Home() {
                 onClick={handleTestQuote}
               >
                 {isTestingQuote
-                  ? "Testing Quote API..."
+                  ? "Getting quote..."
                   : selectedTokens.size === 0
                   ? "Select tokens to swap"
                   : (() => {
                       const totalValue = Array.from(selectedTokens).reduce((sum, symbol) => {
                         const token = allTokenBalances.find(t => t.symbol === symbol);
-                        return sum + (token?.usdValue || 0);
+                        const percentage = tokenAmounts.get(symbol) || 100;
+                        return sum + ((token?.usdValue || 0) * percentage / 100);
                       }, 0);
                       return `Swap for $${totalValue.toFixed(2)}`;
                     })()}

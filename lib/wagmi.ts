@@ -9,7 +9,7 @@ export function getConfig() {
       coinbaseWallet({
         appName: 'Flush',
       }),
-      injected(), // EIP-6963 지원 지갑 (Rabby 포함)
+      injected(),
     ],
     storage: createStorage({
       storage: cookieStorage,

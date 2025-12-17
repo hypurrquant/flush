@@ -10,24 +10,24 @@ export interface OdosSwapInput {
 
 export interface OdosQuoteResponse {
   pathId: string;
-  inTokens: string[];                  // 입력 토큰 주소 배열
-  outTokens: string[];                 // 출력 토큰 주소 배열
-  inAmounts: string[];                 // 입력 토큰 수량 배열
-  outAmounts: string[];                // 출력 토큰 수량 배열
-  gasEstimate: number;                 // 예상 가스 사용량
-  dataGasEstimate?: number;            // 데이터 가스 예상량
-  gweiPerGas?: number;                 // 가스당 Gwei
-  gasEstimateValue?: number;           // 예상 가스 비용 (USD)
-  inValues?: number[];                 // 입력 토큰 가치 (USD)
-  outValues?: number[];                // 출력 토큰 가치 (USD)
-  netOutValue?: number;                // 순 출력 가치 (USD)
-  priceImpact?: number;                // 가격 영향 (%)
-  percentDiff?: number;                // 가격 차이 (%)
-  permit2Message?: unknown | null;     // Permit2 메시지
-  permit2Hash?: string | null;         // Permit2 해시
-  pathViz?: unknown | null;             // 경로 시각화 데이터
-  blockNumber?: number;                // 블록 번호
-  // 하위 호환성을 위한 필드
+  inTokens: string[];
+  outTokens: string[];
+  inAmounts: string[];
+  outAmounts: string[];
+  gasEstimate: number;
+  dataGasEstimate?: number;
+  gweiPerGas?: number;
+  gasEstimateValue?: number;
+  inValues?: number[];
+  outValues?: number[];
+  netOutValue?: number;
+  priceImpact?: number;
+  percentDiff?: number;
+  permit2Message?: unknown | null;
+  permit2Hash?: string | null;
+  pathViz?: unknown | null;
+  blockNumber?: number;
+  // Legacy fields for backward compatibility
   inputTokens?: Array<{
     tokenAddress: string;
     amount: string;
@@ -262,16 +262,16 @@ export async function prepareOdosBatchSwap(
 }
 
 export interface OdosQuoteOptions {
-  simple?: boolean;              // 간단한 모드 (빠른 응답)
-  disableRFQs?: boolean;          // RFQ 거래소 비활성화 (기본값: true)
-  likeAsset?: boolean;            // 같은 자산 타입만 라우팅
-  gasPrice?: string;              // 가스 가격 (선택사항)
-  sourceBlacklist?: string[];     // 제외할 유동성 소스
-  sourceWhitelist?: string[];     // 사용할 유동성 소스만
-  poolBlacklist?: string[];        // 제외할 풀 ID
-  pathVizImage?: boolean;         // 경로 시각화 이미지
-  compact?: boolean;              // V2 compact call data 사용
-  referralCode?: number;          // Odos Partner Code
+  simple?: boolean;
+  disableRFQs?: boolean;
+  likeAsset?: boolean;
+  gasPrice?: string;
+  sourceBlacklist?: string[];
+  sourceWhitelist?: string[];
+  poolBlacklist?: string[];
+  pathVizImage?: boolean;
+  compact?: boolean;
+  referralCode?: number;
 }
 
 /**

@@ -400,6 +400,8 @@ export interface ZeroExCombinedQuote {
     data: string;
     value: string;
   }>;
+  // Retry count (how many retries were needed)
+  retryCount?: number;
 }
 
 /**

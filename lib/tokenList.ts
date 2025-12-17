@@ -1,6 +1,5 @@
 /**
- * OnchainKit API를 사용한 토큰 리스트 가져오기
- * OnchainKitProvider가 이미 설정되어 있으면 API Key 자동 사용됨
+ * Fetch token list using OnchainKit API
  */
 
 import { getTokens } from '@coinbase/onchainkit/api';
@@ -13,13 +12,13 @@ export interface TokenInfo {
   decimals: number;
   image: string | null;
   chainId: number;
-  priceUSD?: number; // 가격 정보는 별도로 가져와야 함
+  priceUSD?: number;
 }
 
 /**
- * Base 네트워크의 토큰 리스트 가져오기
- * @param search - 검색어 (symbol, name, address로 검색 가능)
- * @param limit - 최대 반환 개수
+ * Fetch token list from Base network
+ * @param search - Search query (symbol, name, or address)
+ * @param limit - Maximum number of results
  */
 export async function fetchTokensFromOnchainKit(
   search?: string,
@@ -28,7 +27,7 @@ export async function fetchTokensFromOnchainKit(
   try {
     const tokens = await getTokens({ 
       search, 
-      limit: limit || '100' // 기본값 100개
+      limit: limit || '100'
     });
 
     // Check if response is an error or token array

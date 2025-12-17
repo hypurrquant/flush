@@ -53,24 +53,20 @@ export async function checkTokenApproval(
 
 /**
  * Create approve call data
- * Uses max uint256 for unlimited approval to avoid repeated approvals
+ * Approves only the exact amount needed for the swap
  */
 export function createApproveCall(
   tokenAddress: Address,
   spenderAddress: Address,
-  _amount: bigint
+  amount: bigint
 ): { to: Address; value: Hex; data: Hex } {
-  // Use max uint256 for unlimited approval (more gas efficient in long run)
-  // This way user only needs to approve once per token
-  const MAX_UINT256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
-  
   return {
     to: tokenAddress,
     value: '0x0' as Hex,
     data: encodeFunctionData({
       abi: ERC20_ABI,
       functionName: 'approve',
-      args: [spenderAddress, MAX_UINT256],
+      args: [spenderAddress, amount],
     }),
   };
 }

@@ -62,14 +62,16 @@
 /* OnchainKit wallet component styles override for dark theme */
 [data-ock-theme] button,
 [data-ock-theme] [role="button"] {
-  background-color: rgba(247, 217, 84, 0.2) !important;
-  border: 2px solid #f7d954 !important;
-  color: #f7d954 !important;
+  background-color: rgba(147, 51, 234, 0.15) !important;
+  border: 2px solid rgba(147, 51, 234, 0.5) !important;
+  color: #a855f7 !important;
+  transition: all 0.3s ease !important;
 }
 
 [data-ock-theme] button:hover,
 [data-ock-theme] [role="button"]:hover {
-  background-color: rgba(247, 217, 84, 0.3) !important;
+  background-color: rgba(147, 51, 234, 0.25) !important;
+  border-color: rgba(168, 85, 247, 0.7) !important;
 }
 
 /* Wallet component wrapper styles */
