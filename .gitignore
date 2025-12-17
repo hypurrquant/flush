@@ -39,3 +39,19 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# test files
+test-*.ts
+test-*.png
+test-*.jpg
+
+# IDE / Editor
+.cursorrules
+.idea/
+.vscode/
+
+# AI assistant files
+CLAUDE.md
+
+# large documentation files
+combined-ock-docs-*.mdx

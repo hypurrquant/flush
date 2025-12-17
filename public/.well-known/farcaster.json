@@ -1,0 +1,23 @@
+{
+  "accountAssociation": {
+    "header": "eyJmaWQiOjAsInR5cGUiOiJjdXN0b2R5Iiwia2V5IjoiMHgwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIn0",
+    "payload": "eyJkb21haW4iOiJleGFtcGxlLmNvbSJ9",
+    "signature": "PLACEHOLDER_SIGNATURE"
+  },
+  "frame": {
+    "version": "1",
+    "name": "Flush",
+    "iconUrl": "https://your-domain.com/blue-icon.png",
+    "homeUrl": "https://your-domain.com",
+    "imageUrl": "https://your-domain.com/blue-hero.png",
+    "screenshotUrls": [
+      "https://your-domain.com/screenshot-portrait.png"
+    ],
+    "tags": ["defi", "swap", "base", "usdc"],
+    "primaryCategory": "defi",
+    "buttonTitle": "Launch Flush",
+    "splashImageUrl": "https://your-domain.com/splash.png",
+    "splashBackgroundColor": "#0a0a0a",
+    "webhookUrl": "https://your-domain.com/api/notifications"
+  }
+}

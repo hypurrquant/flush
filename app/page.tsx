@@ -24,18 +24,17 @@ import {
 } from "@coinbase/onchainkit/transaction";
 import { useAccount, useBalance, usePublicClient } from "wagmi";
 import { base } from "wagmi/chains";
-import { formatTokenBalance, formatCurrency } from "../lib/tokenUtils";
+import { formatTokenBalance } from "../lib/tokenUtils";
 import { fetchPopularTokensList, type TokenInfo } from "../lib/tokenList";
 import { USDC_ADDRESS } from "../lib/constants";
-import { testOdosQuote, assembleOdosSwap, type OdosQuoteResponse } from "../lib/odos";
+import { getZeroExCombinedQuote, getZeroExTransactions, type ZeroExCombinedQuote, FEE_CONFIG } from "../lib/zeroex";
 import { checkTokenApproval, createApproveCall, checkBatchCapabilities } from "../lib/batchSwap";
 import { sendNotification, NotificationTemplates } from "../lib/notifications";
 import { TokenImage } from "../components/TokenImage";
-import { OnboardingModal } from "../components/OnboardingModal";
 import { BottomNavigation } from "../components/BottomNavigation";
 import { RewardsTab } from "../components/RewardsTab";
 import type { Hex, Address as ViemAddress } from "viem";
-import { numberToHex } from "viem";
+import { numberToHex, parseEventLogs } from "viem";
 import styles from "./page.module.css";
 
 interface TokenBalanceData {
@@ -62,27 +61,40 @@ export default function Home() {
   const [hideDustTokens, setHideDustTokens] = useState(true); // 기본값: dust token 숨김
   const [activeTab, setActiveTab] = useState<'balance' | 'swapHistory' | 'rewards' | 'hideSmallBalance'>('balance');
   const [isTestingQuote, setIsTestingQuote] = useState(false);
-  const [quoteResult, setQuoteResult] = useState<OdosQuoteResponse | null>(null);
+  const [quoteResult, setQuoteResult] = useState<ZeroExCombinedQuote | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showOutputTokenSelector, setShowOutputTokenSelector] = useState(false);
-  const [swapCalls, setSwapCalls] = useState<Array<{ to: Hex; data: Hex; value: bigint }> | null>(null);
-  const [isAssembling, setIsAssembling] = useState(false);
+  const [_isAssembling, setIsAssembling] = useState(false);
   const [approvalStatuses, setApprovalStatuses] = useState<Map<string, { approved: boolean; needsApproval: boolean; currentAllowance: bigint }>>(new Map());
   const [isCheckingApprovals, setIsCheckingApprovals] = useState(false);
   const [batchSupported, setBatchSupported] = useState<boolean | null>(null);
   const [isCheckingBatchSupport, setIsCheckingBatchSupport] = useState(false);
-  const [transactionQueue, setTransactionQueue] = useState<Array<{ to: ViemAddress; value: bigint; data: Hex }>>([]);
-  const [currentTransactionIndex, setCurrentTransactionIndex] = useState<number>(-1);
   const [walletType, setWalletType] = useState<'coinbase-smart-wallet' | 'eoa' | 'unknown' | null>(null);
   const [isCheckingWalletType, setIsCheckingWalletType] = useState(false);
   
-  // Onboarding state
-  const [showOnboarding, setShowOnboarding] = useState(false);
-  const [onboardingStep, setOnboardingStep] = useState(0);
-  
   // User FID for notifications
   const [userFid, setUserFid] = useState<string | null>(null);
+  
+  // Swap success modal
+  const [swapSuccessData, setSwapSuccessData] = useState<{
+    inputTokens: Array<{ symbol: string; amount: string; address: string; image: string | null }>;
+    outputTokens: Array<{ symbol: string; amount: string; address: string; image: string | null }>;
+    transactionHash?: string;
+  } | null>(null);
+  
+  // Transaction simulation state
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [simulationResult, setSimulationResult] = useState<'success' | 'failed' | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<Array<{ tokenAddress: string; symbol: string }>>([]);
+  const [isApproving, setIsApproving] = useState(false);
+  
+  // Transaction error state
+  const [swapError, setSwapError] = useState<{
+    message: string;
+    isSimulationError: boolean;
+    canRetry: boolean;
+  } | null>(null);
   
   // Odos API 설정
   const [slippageLimitPercent, setSlippageLimitPercent] = useState(0.5);
@@ -96,14 +108,6 @@ export default function Home() {
       setFrameReady();
     }
   }, [isFrameReady, setFrameReady]);
-
-  // Check if user has seen onboarding
-  useEffect(() => {
-    const hasSeenOnboarding = localStorage.getItem('flush-onboarding-seen');
-    if (!hasSeenOnboarding && !isConnected) {
-      setShowOnboarding(true);
-    }
-  }, [isConnected]);
 
   // Get user FID for notifications
   useEffect(() => {
@@ -126,33 +130,13 @@ export default function Home() {
     }
   }, [isConnected]);
 
-  // Mark onboarding as seen when user connects wallet or closes onboarding
-  const handleOnboardingComplete = useCallback(() => {
-    localStorage.setItem('flush-onboarding-seen', 'true');
-    setShowOnboarding(false);
-    setOnboardingStep(0);
-  }, []);
-
-  const handleOnboardingNext = useCallback(() => {
-    setOnboardingStep((prev) => {
-      if (prev < 2) {
-        return prev + 1;
-      } else {
-        handleOnboardingComplete();
-        return prev;
-      }
-    });
-  }, [handleOnboardingComplete]);
-
-  const handleOnboardingSkip = useCallback(() => {
-    handleOnboardingComplete();
-  }, [handleOnboardingComplete]);
-
   // Close output token selector when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
-      if (showOutputTokenSelector && !target.closest(`.${styles.outputTokenSelector}`)) {
+      if (showOutputTokenSelector && 
+          !target.closest(`.${styles.outputTokenSelectorWrapper}`) &&
+          !target.closest(`.${styles.outputTokenDropdown}`)) {
         setShowOutputTokenSelector(false);
       }
     };
@@ -164,6 +148,11 @@ export default function Home() {
       };
     }
   }, [showOutputTokenSelector]);
+
+  // Debug: Log outputTokenAddress changes
+  useEffect(() => {
+    console.log('outputTokenAddress changed to:', outputTokenAddress);
+  }, [outputTokenAddress]);
 
   // Check wallet type and batch transaction capabilities when connected
   useEffect(() => {
@@ -458,13 +447,17 @@ export default function Home() {
         image: "https://wallet-api-production.s3.amazonaws.com/uploads/tokens/eth_288.png",
       };
     }
-    return allTokenBalances.find(t => t.address.toLowerCase() === outputTokenAddress.toLowerCase()) || 
-           tokenList.find(t => t.address.toLowerCase() === outputTokenAddress.toLowerCase()) || {
-             address: outputTokenAddress,
-             symbol: "UNKNOWN",
-             name: "Unknown Token",
-             image: null,
-           };
+    const found = allTokenBalances.find(t => t.address.toLowerCase() === outputTokenAddress.toLowerCase()) || 
+                  tokenList.find(t => t.address.toLowerCase() === outputTokenAddress.toLowerCase());
+    if (found) {
+      return found;
+    }
+    return {
+      address: outputTokenAddress,
+      symbol: "UNKNOWN",
+      name: "Unknown Token",
+      image: null,
+    };
   }, [outputTokenAddress, allTokenBalances, tokenList]);
 
   // 출력 토큰으로 사용 가능한 토큰 목록 (보유한 토큰 + 인기 토큰)
@@ -494,8 +487,22 @@ export default function Home() {
       chainId: base.id,
     });
     
-    return Array.from(tokens.values());
-  }, [allTokenBalances, tokenList]);
+    // USDC 추가 (항상 사용 가능)
+    tokens.set(USDC_ADDRESS.toLowerCase(), {
+      address: USDC_ADDRESS,
+      symbol: "USDC",
+      name: "USD Coin",
+      balanceFormatted: "0",
+      decimals: 6,
+      image: "https://wallet-api-production.s3.amazonaws.com/uploads/tokens/usdc_288.png",
+      chainId: base.id,
+    });
+    
+    const result = Array.from(tokens.values());
+    console.log('Available output tokens:', result.length, result.map(t => ({ symbol: t.symbol, address: t.address })));
+    console.log('Output token address state:', outputTokenAddress);
+    return result;
+  }, [allTokenBalances, tokenList, outputTokenAddress]);
 
   // Filter dust tokens
   const filteredTokenBalances = useMemo(() => {
@@ -631,19 +638,21 @@ export default function Home() {
         throw new Error('스왑할 토큰이 없습니다');
       }
 
-      console.log('Testing Odos Quote API v3 with inputTokens:', selectedTokenData);
+      console.log('Testing 0x Quote API with inputTokens:', selectedTokenData);
 
-      // Step 1: Generate a quote using Odos API v3
-      // Reference: https://docs.odos.xyz/build/quickstart/sor
-      const quote = await testOdosQuote(
+      // Step 1: Generate a quote using 0x API
+      // Convert slippage from percent to basis points (0.5% -> 50 bps)
+      const slippageBps = Math.round(slippageLimitPercent * 100);
+
+      const quote = await getZeroExCombinedQuote(
         selectedTokenData,
         outputTokenAddress.toLowerCase(),
         address.toLowerCase(),
-        slippageLimitPercent,
+        slippageBps,
         base.id
       );
 
-      console.log('Odos Quote API v3 Response:', quote);
+      console.log('0x Quote API Response:', quote);
       console.log('Quote Details:', {
         pathId: quote.pathId,
         inputTokens: quote.inTokens,
@@ -653,47 +662,55 @@ export default function Home() {
         gasEstimate: quote.gasEstimate,
         priceImpact: quote.priceImpact,
         netOutValue: quote.netOutValue,
+        totalFeeAmount: quote.totalFeeAmount,
+        allowanceTarget: quote.allowanceTarget,
       });
       setQuoteResult(quote);
-      setSwapCalls(null); // Reset swap calls when new quote is generated
       setApprovalStatuses(new Map()); // Reset approval statuses
-      
+      setSimulationResult(null); // Reset simulation result
+      setIsSimulating(false);
+      setPendingApprovals([]);
+
       // Check approval statuses for all input tokens
       if (quote.inTokens && quote.inAmounts && address) {
         setIsCheckingApprovals(true);
         const statusMap = new Map<string, { approved: boolean; needsApproval: boolean; currentAllowance: bigint }>();
-        
-        // First, assemble to get router address
+
         try {
-          // Assemble transaction using pathId from quote
-          // Paths are valid for 60 seconds after the quote is received
-          const assembleResult = await assembleOdosSwap(
-            quote.pathId,
-            address.toLowerCase(),
-            slippageLimitPercent, // Optional: slippage tolerance
-            base.id, // Optional: chain ID
-            false // simulate: false (we're handling gas estimation ourselves)
-          );
-          const odosRouterAddress = assembleResult.transaction.to as ViemAddress;
-          
+          // 0x already provides the allowanceTarget in the quote
+          const allowanceTarget = quote.allowanceTarget as ViemAddress;
+
           // Check each token
           const approvalPromises = quote.inTokens.map(async (tokenAddress) => {
             const tokenAddr = tokenAddress as ViemAddress;
-            
+
             // Skip ETH
             if (tokenAddr.toLowerCase() === '0x0000000000000000000000000000000000000000') {
               statusMap.set(tokenAddr.toLowerCase(), { approved: true, needsApproval: false, currentAllowance: 0n });
               return;
             }
-            
+
             // Check with max uint256 to see if unlimited approval exists
             const MAX_UINT256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
-            const approval = await checkTokenApproval(tokenAddr, address as ViemAddress, MAX_UINT256, odosRouterAddress);
+            const approval = await checkTokenApproval(tokenAddr, address as ViemAddress, MAX_UINT256, allowanceTarget);
             statusMap.set(tokenAddr.toLowerCase(), approval);
           });
-          
+
           await Promise.all(approvalPromises);
           setApprovalStatuses(statusMap);
+
+          // Set pending approvals for tokens that need approval
+          const pending: Array<{ tokenAddress: string; symbol: string }> = [];
+          statusMap.forEach((status, tokenAddress) => {
+            if (status.needsApproval) {
+              const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
+                           tokenList.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase());
+              if (token) {
+                pending.push({ tokenAddress, symbol: token.symbol });
+              }
+            }
+          });
+          setPendingApprovals(pending);
         } catch (error) {
           console.error('Error checking approvals:', error);
         } finally {
@@ -707,171 +724,59 @@ export default function Home() {
     } finally {
       setIsTestingQuote(false);
     }
-  }, [address, selectedTokens, outputTokenAddress, slippageLimitPercent, allTokenBalances, tokenBalances, ethBalance]);
+  }, [address, selectedTokens, outputTokenAddress, slippageLimitPercent, allTokenBalances, tokenBalances, ethBalance, tokenList]);
 
-  // Assemble and execute swap transaction with approve checks
-  const handleExecuteSwap = useCallback(async () => {
-    if (!quoteResult || !address) return;
+  // Prepare swap transaction calls (used as Promise for Transaction component)
+  // This only includes swap call, not approve calls (approve is handled separately)
+  const prepareSwapCalls = useCallback(async (): Promise<Array<{ to: ViemAddress; value: bigint; data: Hex }>> => {
+    if (!quoteResult || !address) {
+      throw new Error('Quote result or address is missing');
+    }
 
     setIsAssembling(true);
     try {
-      // Assemble transaction using pathId from quote
-      // Paths are valid for 60 seconds after the quote is received
-      const assembleResult = await assembleOdosSwap(
-        quoteResult.pathId,
-        address.toLowerCase(),
-        slippageLimitPercent, // Optional: slippage tolerance
-        base.id, // Optional: chain ID
-        false // simulate: false (we're handling gas estimation ourselves)
-      );
+      // 0x provides transaction data directly in the quote
+      const { transactions } = getZeroExTransactions(quoteResult);
 
-      console.log('Assemble result:', assembleResult);
+      console.log('0x Transactions:', transactions);
 
-      const odosRouterAddress = assembleResult.transaction.to as ViemAddress;
-      console.log('📋 Odos Router Address:', odosRouterAddress);
-      
-      const calls: Array<{ to: ViemAddress; value: Hex; data: Hex }> = [];
+      // Convert all swap transactions to the expected format
+      const calls: Array<{ to: ViemAddress; value: bigint; data: Hex }> = transactions.map((tx, index) => {
+        console.log(`\n🔄 Swap transaction ${index + 1}:`);
+        console.log('  - To:', tx.to);
+        console.log('  - Value:', tx.value);
+        console.log('  - Data:', tx.data.substring(0, 50) + '...' + tx.data.substring(tx.data.length - 50));
+        console.log('  - Data Length:', tx.data.length);
 
-      // Check approvals for each input token
-      if (quoteResult.inTokens && quoteResult.inAmounts) {
-        console.log(`\n🔍 Checking approvals for ${quoteResult.inTokens.length} input token(s)...`);
-        
-        for (let i = 0; i < quoteResult.inTokens.length; i++) {
-          const tokenAddress = quoteResult.inTokens[i] as ViemAddress;
-          const amount = BigInt(quoteResult.inAmounts[i] || '0');
-          
-          console.log(`\n📦 Token ${i + 1}/${quoteResult.inTokens.length}:`);
-          console.log('  - Address:', tokenAddress);
-          console.log('  - Amount:', amount.toString());
-
-          // Skip ETH (native token doesn't need approval)
-          if (tokenAddress.toLowerCase() === '0x0000000000000000000000000000000000000000') {
-            console.log('  - Type: ETH (native token, no approval needed)');
-            continue;
-          }
-
-          // Check if approval is needed (including WETH)
-          // Check with max uint256 to see if unlimited approval exists
-          const MAX_UINT256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
-          console.log('  - Checking approval status...');
-          
-          const approval = await checkTokenApproval(tokenAddress, address as ViemAddress, MAX_UINT256, odosRouterAddress);
-          
-          console.log('  - Current Allowance:', approval.currentAllowance.toString());
-          console.log('  - Approved:', approval.approved);
-          console.log('  - Needs Approval:', approval.needsApproval);
-          
-          if (approval.needsApproval) {
-            console.log(`  ✅ Adding approve call for token ${tokenAddress}`);
-            const approveCall = createApproveCall(tokenAddress, odosRouterAddress, amount);
-            console.log('  - Approve Call Details:', {
-              to: approveCall.to,
-              value: approveCall.value,
-              data: approveCall.data.substring(0, 20) + '...' + approveCall.data.substring(approveCall.data.length - 20),
-              dataLength: approveCall.data.length
-            });
-            calls.push(approveCall);
-          } else {
-            console.log(`  ⏭️  Token ${tokenAddress} already has unlimited approval, skipping`);
-          }
-        }
-      }
-
-      // Add the swap transaction call
-      console.log(`\n🔄 Adding swap transaction call:`);
-      console.log('  - To:', odosRouterAddress);
-      console.log('  - Value:', assembleResult.transaction.value);
-      console.log('  - Data:', assembleResult.transaction.data.substring(0, 50) + '...' + assembleResult.transaction.data.substring(assembleResult.transaction.data.length - 50));
-      console.log('  - Data Length:', assembleResult.transaction.data.length);
-      
-      const swapCall = {
-        to: odosRouterAddress,
-        data: assembleResult.transaction.data as Hex,
-        value: numberToHex(BigInt(assembleResult.transaction.value || '0')) as Hex,
-      };
-      
-      calls.push(swapCall);
-
-      console.log(`\n📊 Final Batch Calls Summary:`);
-      console.log(`  - Total Calls: ${calls.length}`);
-      console.log(`  - Approve Calls: ${calls.length - 1}`);
-      console.log(`  - Swap Call: 1`);
-      console.log('\n📋 Complete Calls Array:');
-      calls.forEach((call, index) => {
-        console.log(`\n  Call ${index + 1}:`);
-        console.log('    to:', call.to);
-        console.log('    value:', call.value);
-        
-        // Decode function selector for approve calls
-        if (call.data.startsWith('0x095ea7b3')) {
-          console.log('    type: ERC20 Approve');
-          console.log('    function: approve(address spender, uint256 amount)');
-          // Decode approve parameters
-          const spender = '0x' + call.data.substring(34, 74);
-          const amount = call.data.substring(74);
-          console.log('    spender:', spender);
-          console.log('    amount:', amount === 'f'.repeat(64) ? 'MAX_UINT256 (unlimited)' : BigInt('0x' + amount).toString());
-        } else {
-          console.log('    type: Odos Swap');
-          console.log('    function: swapMultiCompact (or similar Odos function)');
-        }
-        
-        console.log('    data:', call.data.substring(0, 66) + '...' + (call.data.length > 66 ? call.data.substring(call.data.length - 20) : ''));
-        console.log('    data length:', call.data.length, 'bytes');
+        return {
+          to: tx.to as ViemAddress,
+          data: tx.data as Hex,
+          value: BigInt(tx.value || '0'),
+        };
       });
-      
-      console.log('\n🔗 Full Calls Object:', JSON.stringify(calls.map(c => ({
-        to: c.to,
-        value: c.value,
-        data: c.data.substring(0, 20) + '...' + c.data.substring(c.data.length - 20),
-        type: c.data.startsWith('0x095ea7b3') ? 'ERC20 Approve' : 'Odos Swap'
-      })), null, 2));
 
-      // Check if batch transactions are supported
-      console.log('\n🔍 Checking batch transaction support...');
-      const batchSupported = await checkBatchCapabilities();
-      console.log('📊 Batch Support:', batchSupported ? '✅ Supported' : '❌ Not supported');
-      
-      if (batchSupported && calls.length > 1) {
-        // Use Base Account SDK for batch transaction
-        console.log('✅ Using batch transaction (Base Account SDK)');
-        setSwapCalls(calls.map(call => ({
-          ...call,
-          value: BigInt(call.value),
-        })));
-        setTransactionQueue([]);
-        setCurrentTransactionIndex(-1);
-      } else {
-        if (!batchSupported && calls.length > 1) {
-          console.warn('⚠️ Batch transactions not supported. Will execute calls sequentially.');
-          // Store all calls in queue for sequential execution
-          setTransactionQueue(calls.map(call => ({
-            to: call.to,
-            data: call.data,
-            value: BigInt(call.value),
-          })));
-          setCurrentTransactionIndex(0); // Start with first transaction
-          setSwapCalls(null); // Don't use batch
-        } else {
-          // Only swap transaction, no approve needed
-          console.log('✅ Only swap transaction needed');
-          setSwapCalls([{
-            to: odosRouterAddress,
-            data: assembleResult.transaction.data as Hex,
-            value: BigInt(assembleResult.transaction.value || '0'),
-          }]);
-          setTransactionQueue([]);
-          setCurrentTransactionIndex(-1);
-        }
-      }
+      console.log(`\n📊 Swap Call Summary:`);
+      console.log(`  - Total Swap Calls: ${calls.length}`);
+      console.log(`  - Fee: ${FEE_CONFIG.swapFeeBps / 100}% (${quoteResult.totalFeeAmount} wei)`);
+
+      return calls;
     } catch (error) {
-      console.error('Assemble error:', error);
+      console.error('Transaction preparation error:', error);
       const errorMessage = error instanceof Error ? error.message : '트랜잭션 준비 실패';
       setQuoteError(errorMessage);
+      throw error;
     } finally {
       setIsAssembling(false);
     }
-  }, [quoteResult, address, slippageLimitPercent]);
+  }, [quoteResult, address]);
+
+
+  // Close quote modal when swap success modal is shown
+  useEffect(() => {
+    if (swapSuccessData) {
+      setQuoteResult(null);
+    }
+  }, [swapSuccessData]);
 
   return (
     <div className={styles.container}>
@@ -880,11 +785,11 @@ export default function Home() {
         <div className={styles.totalValue}>
           <div className={styles.label}>Total</div>
           <div className={styles.value}>
-            ${formatCurrency(totalPortfolioValue.toString())}
+            ${totalPortfolioValue.toFixed(2)}
           </div>
           {isConnected && totalSwappedAmount > 0 && (
             <div className={styles.totalSwapped}>
-              Swapped: ${formatCurrency(totalSwappedAmount.toString())}
+              Swapped: ${totalSwappedAmount.toFixed(2)}
             </div>
           )}
         </div>
@@ -991,14 +896,12 @@ export default function Home() {
       {quoteResult && (
         <div className={styles.settingsModal} onClick={() => {
           setQuoteResult(null);
-          setSwapCalls(null);
         }}>
           <div className={styles.settingsModalContent} onClick={(e) => e.stopPropagation()}>
             <div className={styles.settingsHeader}>
               <h2>✓ Quote 성공!</h2>
               <button onClick={() => {
                 setQuoteResult(null);
-                setSwapCalls(null);
               }} className={styles.closeButton}>
                 ×
               </button>
@@ -1045,7 +948,7 @@ export default function Home() {
                             )}
                             <div className={styles.swapPreviewTokenInfo}>
                               <div className={styles.swapPreviewTokenAmount}>
-                                {amountNum.toLocaleString('en-US', { maximumFractionDigits: 6 })} {symbol}
+                                {(amountNum || 0).toLocaleString('en-US', { maximumFractionDigits: 6 })} {symbol}
                               </div>
                             </div>
                             <div className={styles.swapPreviewTokenStatus}>
@@ -1114,10 +1017,10 @@ export default function Home() {
                             )}
                             <div className={styles.swapPreviewTokenInfo}>
                               <div className={styles.swapPreviewTokenAmount}>
-                                {amountNum.toLocaleString('en-US', { maximumFractionDigits: 6 })} {symbol}
+                                {(amountNum || 0).toLocaleString('en-US', { maximumFractionDigits: 6 })} {symbol}
                               </div>
                               <div className={styles.swapPreviewTokenSubtext}>
-                                최소: {minReceived.toLocaleString('en-US', { maximumFractionDigits: 6 })} {symbol}
+                                최소: {(minReceived || 0).toLocaleString('en-US', { maximumFractionDigits: 6 })} {symbol}
                               </div>
                             </div>
                             <div className={styles.swapPreviewTokenStatus}>
@@ -1199,7 +1102,7 @@ export default function Home() {
                       const outputAmountNum = parseFloat(outputAmount) / Math.pow(10, outputTokenInfo?.decimals || 18);
                       // Apply slippage
                       const minReceived = outputAmountNum * (1 - slippageLimitPercent / 100);
-                      return `${minReceived.toLocaleString('en-US', { maximumFractionDigits: 6 })} ${outputSymbol}`;
+                      return `${(minReceived || 0).toLocaleString('en-US', { maximumFractionDigits: 6 })} ${outputSymbol}`;
                     })()}
                   </div>
                 </div>
@@ -1222,7 +1125,7 @@ export default function Home() {
               <details className={styles.quoteDetails}>
                 <summary className={styles.quoteDetailsSummary}>더 보기</summary>
                 <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                  {quoteResult.gasEstimate !== undefined && (
+                  {quoteResult.gasEstimate != null && (
                     <div className={styles.quoteInfoRow}>
                       <div className={styles.quoteInfoLabel}>Gas Estimate</div>
                       <div className={styles.quoteInfoValue}>{quoteResult.gasEstimate.toLocaleString()}</div>
@@ -1324,117 +1227,433 @@ export default function Home() {
                   </div>
                 ) : null}
                 
-                {!swapCalls && currentTransactionIndex === -1 ? (
-                  <button
-                    onClick={handleExecuteSwap}
-                    disabled={isAssembling}
-                    className={styles.swapButton}
-                    style={{ fontSize: '0.875rem', padding: '0.75rem' }}
-                  >
-                    {isAssembling ? '스왑 실행 중...' : '스왑 실행하기'}
-                  </button>
-                ) : currentTransactionIndex >= 0 && transactionQueue.length > 0 ? (
-                  // Sequential execution mode (batch not supported)
-                  <>
-                    <div style={{ 
-                      padding: '0.75rem', 
-                      background: 'rgba(251, 191, 36, 0.1)', 
-                      border: '1px solid rgba(251, 191, 36, 0.3)',
-                      borderRadius: '8px',
-                      fontSize: '0.75rem',
-                      color: '#fbbf24',
-                      marginBottom: '0.75rem'
-                    }}>
-                      순차 실행 모드: {currentTransactionIndex + 1}/{transactionQueue.length}번째 트랜잭션
-                      {transactionQueue[currentTransactionIndex]?.data.startsWith('0x095ea7b3') && ' (Approve)'}
-                      {!transactionQueue[currentTransactionIndex]?.data.startsWith('0x095ea7b3') && ' (Swap)'}
-                    </div>
+                {/* Error Message in Quote Modal */}
+                {swapError && (
+                  <div style={{ 
+                    padding: '0.75rem', 
+                    background: 'rgba(252, 165, 165, 0.1)', 
+                    border: '1px solid rgba(252, 165, 165, 0.3)',
+                    borderRadius: '8px',
+                    fontSize: '0.875rem',
+                    color: '#fca5a5',
+                    marginBottom: '0.75rem'
+                  }}>
+                    {swapError.message}
+                  </div>
+                )}
+                
+                {quoteResult && (() => {
+                  const needsApprovalCount = Array.from(approvalStatuses.values()).filter(s => s.needsApproval).length;
+                  
+                  // If there's an error, show retry options
+                  if (swapError) {
+                    return (
+                      <div style={{ display: 'flex', gap: '0.75rem' }}>
+                        {swapError.isSimulationError ? (
+                          <button
+                            onClick={async () => {
+                              setSwapError(null);
+                              setSimulationResult(null);
+                            }}
+                            className={styles.swapButton}
+                            style={{ flex: 1 }}
+                          >
+                            다시 시도
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              onClick={async () => {
+                                setSwapError(null);
+                                if (selectedTokens.size > 0 && address) {
+                                  await handleTestQuote();
+                                }
+                              }}
+                              className={styles.swapButton}
+                              style={{ flex: 1, background: '#fbbf24', color: '#000' }}
+                            >
+                              경로 재탐색
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSwapError(null);
+                                setSimulationResult(null);
+                              }}
+                              className={styles.swapButton}
+                              style={{ flex: 1 }}
+                            >
+                              다시 시도
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    );
+                  }
+                  
+                  // If simulation failed, show "경로 재탐색" button
+                  if (simulationResult === 'failed') {
+                    return (
+                      <button
+                        onClick={async () => {
+                          setSimulationResult(null);
+                          setQuoteResult(null);
+                          if (selectedTokens.size > 0 && address) {
+                            await handleTestQuote();
+                          }
+                        }}
+                        className={styles.swapButton}
+                        style={{ background: '#fbbf24', color: '#000' }}
+                      >
+                        경로 재탐색
+                      </button>
+                    );
+                  }
+                  
+                  // If approvals are needed, show approve button first
+                  if (needsApprovalCount > 0 && pendingApprovals.length > 0) {
+                    // Prepare approve calls
+                    const prepareApproveCalls = async (): Promise<Array<{ to: ViemAddress; value: bigint; data: Hex }>> => {
+                      if (!quoteResult || !address) {
+                        throw new Error('Quote result or address is missing');
+                      }
+
+                      // 0x provides allowanceTarget directly in the quote
+                      const allowanceTarget = quoteResult.allowanceTarget as ViemAddress;
+                      const approveCalls: Array<{ to: ViemAddress; value: bigint; data: Hex }> = [];
+
+                      if (quoteResult.inTokens && quoteResult.inAmounts) {
+                        for (let i = 0; i < quoteResult.inTokens.length; i++) {
+                          const tokenAddress = quoteResult.inTokens[i] as ViemAddress;
+                          const amount = BigInt(quoteResult.inAmounts[i] || '0');
+
+                          if (tokenAddress.toLowerCase() === '0x0000000000000000000000000000000000000000') {
+                            continue;
+                          }
+
+                          const approval = await checkTokenApproval(
+                            tokenAddress,
+                            address as ViemAddress,
+                            BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'),
+                            allowanceTarget
+                          );
+
+                          if (approval.needsApproval) {
+                            const approveCall = createApproveCall(tokenAddress, allowanceTarget, amount);
+                            approveCalls.push({
+                              to: approveCall.to,
+                              data: approveCall.data,
+                              value: BigInt(approveCall.value),
+                            });
+                          }
+                        }
+                      }
+
+                      return approveCalls;
+                    };
+                    
+                    return (
+                      <Transaction
+                        chainId={base.id}
+                        calls={prepareApproveCalls}
+                        isSponsored={true}
+                        onStatus={(status) => {
+                          console.log('Approve transaction status:', status);
+                          if (status.statusName === 'init') {
+                            setIsApproving(true);
+                          } else if (status.statusName === 'success') {
+                            // Approve completed, update approval statuses
+                            const updatedStatuses = new Map(approvalStatuses);
+                            pendingApprovals.forEach(token => {
+                              const status = updatedStatuses.get(token.tokenAddress.toLowerCase());
+                              if (status) {
+                                updatedStatuses.set(token.tokenAddress.toLowerCase(), {
+                                  ...status,
+                                  approved: true,
+                                  needsApproval: false,
+                                });
+                              }
+                            });
+                            setApprovalStatuses(updatedStatuses);
+                            setPendingApprovals([]);
+                            setIsApproving(false);
+                            // Trigger simulation after approvals complete
+                            setSimulationResult(null);
+                          } else if (status.statusName === 'error') {
+                            setIsApproving(false);
+                          }
+                        }}
+                      >
+                        <TransactionButton 
+                          className={styles.swapButton} 
+                          text={isApproving ? 'Approve 실행 중...' : `${needsApprovalCount}개 Approve 실행`}
+                        />
+                        <TransactionStatus>
+                          <TransactionStatusLabel />
+                          <TransactionStatusAction />
+                        </TransactionStatus>
+                      </Transaction>
+                    );
+                  }
+                  
+                  // If simulating, show loading state
+                  if (isSimulating) {
+                    return (
+                      <button className={styles.swapButton} disabled>
+                        시뮬레이션 중...
+                      </button>
+                    );
+                  }
+                  
+                  // Show swap button - clicking will trigger simulation first
+                  const buttonText = '스왑 실행하기';
+
+                  // Prepare swap calls (0x quote already includes validated transaction data)
+                  const prepareSwapCallsWithSimulation = async (): Promise<Array<{ to: ViemAddress; value: bigint; data: Hex }>> => {
+                    if (!address) {
+                      throw new Error('Address is required');
+                    }
+
+                    // 0x quotes are already validated, so we skip the simulation step
+                    // If the quote is stale, the transaction will fail and user can retry
+                    console.log('✅ 0x quote is pre-validated, proceeding with swap');
+                    setSimulationResult('success');
+
+                    return await prepareSwapCalls();
+                  };
+                  
+                  return (
                     <Transaction
-                      key={`tx-${currentTransactionIndex}`} // Force remount for each transaction
                       chainId={base.id}
-                      calls={[transactionQueue[currentTransactionIndex]]}
-                      resetAfter={0} // Don't auto-reset, we'll handle it manually
+                      calls={prepareSwapCallsWithSimulation}
                       isSponsored={true}
-                      onStatus={(status) => {
-                        console.log(`Transaction ${currentTransactionIndex + 1}/${transactionQueue.length} status:`, status);
+                      onStatus={async (status) => {
+                        console.log('Transaction status:', status);
+                        console.log('Transaction statusData:', status.statusData);
                         if (status.statusName === 'success') {
-                          // Move to next transaction automatically
-                          setTimeout(() => {
-                            if (currentTransactionIndex < transactionQueue.length - 1) {
-                              console.log(`✅ Transaction ${currentTransactionIndex + 1} completed. Moving to next...`);
-                              setCurrentTransactionIndex(currentTransactionIndex + 1);
-                            } else {
-                              // All transactions completed
-                              console.log('✅ All transactions completed!');
+                          // Parse transaction receipt and prepare success data
+                          const statusData = status.statusData as { transactionReceipts?: Array<{ transactionHash?: string }>; transactionHash?: string };
+                          const receipts = statusData?.transactionReceipts;
+                          const transactionHash = receipts?.[0]?.transactionHash || statusData?.transactionHash;
+                          
+                          console.log('Transaction hash:', transactionHash);
+                          
+                          // Fetch actual token transfers from transaction logs
+                          const inputTokensData: Array<{ symbol: string; amount: string; address: string; image: string | null }> = [];
+                          const outputTokensData: Array<{ symbol: string; amount: string; address: string; image: string | null }> = [];
+                          
+                          if (transactionHash && publicClient && address) {
+                            try {
+                              // Get transaction receipt
+                              const receipt = await publicClient.getTransactionReceipt({
+                                hash: transactionHash as Hex,
+                              });
                               
-                              // Send success notification
-                              if (userFid && selectedTokens.size > 0) {
-                                const notification = NotificationTemplates.swapSuccess(
-                                  selectedTokens.size,
-                                  outputToken.symbol
-                                );
-                                sendNotification(userFid, notification).catch(console.error);
+                              // Parse Transfer events from logs
+                              const transferEvents = parseEventLogs({
+                                abi: [{
+                                  type: 'event',
+                                  name: 'Transfer',
+                                  inputs: [
+                                    { type: 'address', indexed: true, name: 'from' },
+                                    { type: 'address', indexed: true, name: 'to' },
+                                    { type: 'uint256', indexed: false, name: 'value' },
+                                  ],
+                                }],
+                                logs: receipt.logs,
+                              });
+                              
+                              const userAddressLower = address.toLowerCase();
+                              
+                              // Group transfers by token address
+                              const tokenTransfers = new Map<string, { sent: bigint; received: bigint; address: string }>();
+                              
+                              for (const event of transferEvents) {
+                                if (event.eventName === 'Transfer') {
+                                  const from = (event.args as { from: string; to: string; value: bigint }).from.toLowerCase();
+                                  const to = (event.args as { from: string; to: string; value: bigint }).to.toLowerCase();
+                                  const value = (event.args as { from: string; to: string; value: bigint }).value;
+                                  const tokenAddress = event.address.toLowerCase();
+                                  
+                                  // Only track transfers involving the user
+                                  if (from === userAddressLower || to === userAddressLower) {
+                                    if (!tokenTransfers.has(tokenAddress)) {
+                                      tokenTransfers.set(tokenAddress, { sent: BigInt(0), received: BigInt(0), address: event.address });
+                                    }
+                                    
+                                    const transfer = tokenTransfers.get(tokenAddress)!;
+                                    if (from === userAddressLower) {
+                                      transfer.sent += value;
+                                    }
+                                    if (to === userAddressLower) {
+                                      transfer.received += value;
+                                    }
+                                  }
+                                }
                               }
                               
-                              setQuoteResult(null);
-                              setSwapCalls(null);
-                              setTransactionQueue([]);
-                              setCurrentTransactionIndex(-1);
-                              setSelectedTokens(new Set()); // Clear selection after successful swap
+                              // Convert to display format
+                              for (const [tokenAddress, transfer] of tokenTransfers.entries()) {
+                                const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress) ||
+                                             tokenList.find(t => t.address.toLowerCase() === tokenAddress);
+                                
+                                if (token) {
+                                  const decimals = token.decimals || 18;
+                                  
+                                  if (transfer.sent > 0) {
+                                    const formattedAmount = (transfer.sent / BigInt(10 ** decimals)).toString();
+                                    inputTokensData.push({
+                                      symbol: token.symbol,
+                                      amount: formattedAmount,
+                                      address: transfer.address,
+                                      image: token.image || null,
+                                    });
+                                  }
+                                  
+                                  if (transfer.received > 0) {
+                                    const formattedAmount = (transfer.received / BigInt(10 ** decimals)).toString();
+                                    outputTokensData.push({
+                                      symbol: token.symbol,
+                                      amount: formattedAmount,
+                                      address: transfer.address,
+                                      image: token.image || null,
+                                    });
+                                  }
+                                }
+                              }
+                            } catch (error) {
+                              console.error('Error parsing transaction logs:', error);
+                              // Fallback to quote data if log parsing fails
+                              if (quoteResult?.inTokens && quoteResult?.inAmounts) {
+                                quoteResult.inTokens.forEach((tokenAddress, index) => {
+                                  const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
+                                               tokenList.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase());
+                                  if (token) {
+                                    const amount = quoteResult.inAmounts?.[index] || '0';
+                                    const decimals = token.decimals || 18;
+                                    const formattedAmount = (BigInt(amount) / BigInt(10 ** decimals)).toString();
+                                    inputTokensData.push({
+                                      symbol: token.symbol,
+                                      amount: formattedAmount,
+                                      address: tokenAddress,
+                                      image: token.image || null,
+                                    });
+                                  }
+                                });
+                              }
+                              if (quoteResult?.outTokens && quoteResult?.outAmounts) {
+                                quoteResult.outTokens.forEach((tokenAddress, index) => {
+                                  const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
+                                               tokenList.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
+                                               (tokenAddress.toLowerCase() === '0x0000000000000000000000000000000000000000' ? { symbol: 'ETH', decimals: 18, image: null } : null);
+                                  if (token) {
+                                    const amount = quoteResult.outAmounts?.[index] || '0';
+                                    const decimals = token.decimals || 18;
+                                    const formattedAmount = (BigInt(amount) / BigInt(10 ** decimals)).toString();
+                                    outputTokensData.push({
+                                      symbol: token.symbol,
+                                      amount: formattedAmount,
+                                      address: tokenAddress,
+                                      image: token.image || null,
+                                    });
+                                  }
+                                });
+                              }
                             }
-                          }, 500); // Short delay before moving to next
-                        } else if (status.statusName === 'error') {
-                          console.error('Transaction failed:', status.statusData);
-                          
-                          // Send failure notification
-                          if (userFid) {
-                            const notification = NotificationTemplates.swapFailed();
-                            sendNotification(userFid, notification).catch(console.error);
+                          } else {
+                            // Fallback to quote data if no transaction hash
+                            if (quoteResult?.inTokens && quoteResult?.inAmounts) {
+                              quoteResult.inTokens.forEach((tokenAddress, index) => {
+                                const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
+                                             tokenList.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase());
+                                if (token) {
+                                  const amount = quoteResult.inAmounts?.[index] || '0';
+                                  const decimals = token.decimals || 18;
+                                  const formattedAmount = (BigInt(amount) / BigInt(10 ** decimals)).toString();
+                                  inputTokensData.push({
+                                    symbol: token.symbol,
+                                    amount: formattedAmount,
+                                    address: tokenAddress,
+                                    image: token.image || null,
+                                  });
+                                }
+                              });
+                            }
+                            if (quoteResult?.outTokens && quoteResult?.outAmounts) {
+                              quoteResult.outTokens.forEach((tokenAddress, index) => {
+                                const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
+                                             tokenList.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
+                                             (tokenAddress.toLowerCase() === '0x0000000000000000000000000000000000000000' ? { symbol: 'ETH', decimals: 18, image: null } : null);
+                                if (token) {
+                                  const amount = quoteResult.outAmounts?.[index] || '0';
+                                  const decimals = token.decimals || 18;
+                                  const formattedAmount = (BigInt(amount) / BigInt(10 ** decimals)).toString();
+                                  outputTokensData.push({
+                                    symbol: token.symbol,
+                                    amount: formattedAmount,
+                                    address: tokenAddress,
+                                    image: token.image || null,
+                                  });
+                                }
+                              });
+                            }
                           }
                           
-                          // Reset on error
-                          setTransactionQueue([]);
-                          setCurrentTransactionIndex(-1);
-                        }
-                      }}
-                    >
-                      <TransactionButton 
-                        className={styles.swapButton}
-                        text={
-                          transactionQueue[currentTransactionIndex]?.data.startsWith('0x095ea7b3')
-                            ? `Approve 실행 (${currentTransactionIndex + 1}/${transactionQueue.length})`
-                            : `스왑 실행 (${currentTransactionIndex + 1}/${transactionQueue.length})`
-                        }
-                      />
-                      <TransactionStatus>
-                        <TransactionStatusLabel />
-                        <TransactionStatusAction />
-                      </TransactionStatus>
-                    </Transaction>
-                  </>
-                ) : swapCalls ? (
-                  // Batch execution mode (batch supported)
-                  <>
-                    {swapCalls.length > 1 && (
-                      <div style={{ 
-                        padding: '0.75rem', 
-                        background: 'rgba(34, 197, 94, 0.1)', 
-                        border: '1px solid rgba(34, 197, 94, 0.3)',
-                        borderRadius: '8px',
-                        fontSize: '0.75rem',
-                        color: '#86efac',
-                        marginBottom: '0.75rem'
-                      }}>
-                        {swapCalls.length - 1}개의 approve 트랜잭션과 스왑이 배치로 실행됩니다
-                      </div>
-                    )}
-                    <Transaction
-                      chainId={base.id}
-                      calls={swapCalls}
-                      isSponsored={true}
-                      onStatus={(status) => {
-                        console.log('Transaction status:', status);
-                        if (status.statusName === 'success') {
+                          console.log('Input tokens data:', inputTokensData);
+                          console.log('Output tokens data:', outputTokensData);
+                          
+                          // Ensure we have at least some data to show
+                          if (inputTokensData.length === 0 && outputTokensData.length === 0) {
+                            console.warn('No token data found, using quote data as fallback');
+                            // Use quote data as final fallback
+                            if (quoteResult?.inTokens && quoteResult?.inAmounts) {
+                              quoteResult.inTokens.forEach((tokenAddress, index) => {
+                                const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
+                                             tokenList.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase());
+                                if (token) {
+                                  const amount = quoteResult.inAmounts?.[index] || '0';
+                                  const decimals = token.decimals || 18;
+                                  const formattedAmount = (BigInt(amount) / BigInt(10 ** decimals)).toString();
+                                  inputTokensData.push({
+                                    symbol: token.symbol,
+                                    amount: formattedAmount,
+                                    address: tokenAddress,
+                                    image: token.image || null,
+                                  });
+                                }
+                              });
+                            }
+                            if (quoteResult?.outTokens && quoteResult?.outAmounts) {
+                              quoteResult.outTokens.forEach((tokenAddress, index) => {
+                                const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
+                                             tokenList.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
+                                             (tokenAddress.toLowerCase() === '0x0000000000000000000000000000000000000000' ? { symbol: 'ETH', decimals: 18, image: null } : null);
+                                if (token) {
+                                  const amount = quoteResult.outAmounts?.[index] || '0';
+                                  const decimals = token.decimals || 18;
+                                  const formattedAmount = (BigInt(amount) / BigInt(10 ** decimals)).toString();
+                                  outputTokensData.push({
+                                    symbol: token.symbol,
+                                    amount: formattedAmount,
+                                    address: tokenAddress,
+                                    image: token.image || null,
+                                  });
+                                }
+                              });
+                            }
+                          }
+                          
+                          // Close quote modal immediately
+                          setQuoteResult(null);
+                          setSwapError(null); // Clear any errors
+                          
+                          // Show success modal
+                          console.log('Setting swap success data:', { inputTokensData, outputTokensData, transactionHash });
+                          setSwapSuccessData({
+                            inputTokens: inputTokensData,
+                            outputTokens: outputTokensData,
+                            transactionHash,
+                          });
+                          
                           // Send success notification
                           if (userFid && selectedTokens.size > 0) {
                             const notification = NotificationTemplates.swapSuccess(
@@ -1444,10 +1663,53 @@ export default function Home() {
                             sendNotification(userFid, notification).catch(console.error);
                           }
                           
-                          setQuoteResult(null);
-                          setSwapCalls(null);
                           setSelectedTokens(new Set()); // Clear selection after successful swap
+                          setSimulationResult(null); // Reset simulation result after successful swap
                         } else if (status.statusName === 'error') {
+                          console.error('Transaction error:', status.statusData);
+                          
+                          // Parse error message
+                          const statusData = status.statusData as { error?: { message?: string; code?: string | number } };
+                          const errorMessage = statusData?.error?.message || '트랜잭션이 실패했습니다.';
+                          const errorCode = statusData?.error?.code;
+                          
+                          // Check if error is due to simulation failure
+                          const isSimulationError = errorMessage.includes('Simulation failed') || 
+                                                    errorMessage.includes('New quote fetched');
+                          
+                          // Determine if user can retry
+                          let canRetry = true;
+                          let userFriendlyMessage = errorMessage;
+                          
+                          // Handle specific error cases
+                          if (errorCode === 4001 || errorMessage.includes('User rejected')) {
+                            userFriendlyMessage = '트랜잭션이 사용자에 의해 취소되었습니다.';
+                            canRetry = true;
+                          } else if (errorCode === -32603 || errorMessage.includes('execution reverted')) {
+                            userFriendlyMessage = '트랜잭션 실행이 실패했습니다. 잔액이나 승인 상태를 확인해주세요.';
+                            canRetry = true;
+                          } else if (errorMessage.includes('insufficient funds') || errorMessage.includes('gas')) {
+                            userFriendlyMessage = '가스비가 부족합니다. 잔액을 확인해주세요.';
+                            canRetry = true;
+                          } else if (isSimulationError) {
+                            // Simulation failed - new quote was already fetched
+                            setSimulationResult(null);
+                            userFriendlyMessage = '경로 검증 실패. 새로운 경로를 찾았습니다. 다시 시도해주세요.';
+                            canRetry = true;
+                          }
+                          
+                          // Show error modal
+                          setSwapError({
+                            message: userFriendlyMessage,
+                            isSimulationError,
+                            canRetry,
+                          });
+                          
+                          // Reset simulation result if it was a simulation error
+                          if (isSimulationError) {
+                            setSimulationResult(null);
+                          }
+                          
                           // Send failure notification
                           if (userFid) {
                             const notification = NotificationTemplates.swapFailed();
@@ -1456,19 +1718,17 @@ export default function Home() {
                         }
                       }}
                     >
-                      <TransactionButton className={styles.swapButton} />
-                      {swapCalls.length > 1 && (
-                        <div style={{ fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.6)', textAlign: 'center', marginTop: '0.5rem' }}>
-                          {swapCalls.length}개 트랜잭션이 배치로 실행됩니다
-                        </div>
-                      )}
+                      <TransactionButton 
+                        className={styles.swapButton} 
+                        text={buttonText}
+                      />
                       <TransactionStatus>
                         <TransactionStatusLabel />
                         <TransactionStatusAction />
                       </TransactionStatus>
                     </Transaction>
-                  </>
-                ) : null}
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -1495,6 +1755,101 @@ export default function Home() {
         </div>
       )}
 
+      {/* Swap Success Modal */}
+      {swapSuccessData && (
+        <div className={styles.settingsModal} onClick={() => setSwapSuccessData(null)}>
+          <div className={styles.settingsModalContent} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.settingsHeader}>
+              <h2 style={{ color: '#86efac' }}>✓ 스왑 성공!</h2>
+              <button onClick={() => setSwapSuccessData(null)} className={styles.closeButton}>
+                ×
+              </button>
+            </div>
+            
+            <div className={styles.settingsBody}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                {/* Input Tokens */}
+                <div>
+                  <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.6)', marginBottom: '0.75rem' }}>
+                    보낸 토큰
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    {swapSuccessData.inputTokens.map((token, index) => (
+                      <div key={index} style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: '0.75rem',
+                        padding: '0.75rem',
+                        background: 'rgba(255, 255, 255, 0.05)',
+                        borderRadius: '8px'
+                      }}>
+                        {token.image && (
+                          <TokenImage
+                            src={token.image}
+                            alt={token.symbol}
+                            width={32}
+                            height={32}
+                            className={styles.outputTokenOptionImage}
+                          />
+                        )}
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: '0.875rem', fontWeight: 500, color: 'white' }}>
+                            -{parseFloat(token.amount).toFixed(6)} {token.symbol}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Arrow */}
+                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 5V19M12 19L19 12M12 19L5 12" stroke="#86efac" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+
+                {/* Output Tokens */}
+                <div>
+                  <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.6)', marginBottom: '0.75rem' }}>
+                    받은 토큰
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    {swapSuccessData.outputTokens.map((token, index) => (
+                      <div key={index} style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: '0.75rem',
+                        padding: '0.75rem',
+                        background: 'rgba(34, 197, 94, 0.1)',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(34, 197, 94, 0.3)'
+                      }}>
+                        {token.image && (
+                          <TokenImage
+                            src={token.image}
+                            alt={token.symbol}
+                            width={32}
+                            height={32}
+                            className={styles.outputTokenOptionImage}
+                          />
+                        )}
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: '0.875rem', fontWeight: 600, color: '#86efac' }}>
+                            +{parseFloat(token.amount).toFixed(6)} {token.symbol}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Hide Small Balance Toggle - moved to header area */}
       {isConnected && allTokenBalances.length > 0 && (
         <div className={styles.dustFilterHeader}>
@@ -1510,47 +1865,10 @@ export default function Home() {
         </div>
       )}
 
-      {/* Onboarding Modal */}
-      <OnboardingModal
-        showOnboarding={showOnboarding && !isConnected}
-        onboardingStep={onboardingStep}
-        onNext={handleOnboardingNext}
-        onSkip={handleOnboardingSkip}
-      />
-
       {/* Body - Tab Content */}
       <div className={styles.body}>
         {activeTab === 'rewards' && isConnected ? (
           <RewardsTab address={address} />
-        ) : !isConnected && !showOnboarding ? (
-          <div className={styles.onboardingSection}>
-            <div className={styles.onboardingContent}>
-              <h2 className={styles.onboardingTitle}>Welcome to Flush</h2>
-              <p className={styles.onboardingDescription}>
-                Consolidate your tokens in one transaction
-              </p>
-              <div className={styles.onboardingSteps}>
-                <div className={styles.onboardingStep}>
-                  <div className={styles.onboardingStepNumber}>1</div>
-                  <div className={styles.onboardingStepText}>
-                    Connect your wallet to see your token balances
-                  </div>
-                </div>
-                <div className={styles.onboardingStep}>
-                  <div className={styles.onboardingStepNumber}>2</div>
-                  <div className={styles.onboardingStepText}>
-                    Select tokens you want to swap
-                  </div>
-                </div>
-                <div className={styles.onboardingStep}>
-                  <div className={styles.onboardingStepNumber}>3</div>
-                  <div className={styles.onboardingStepText}>
-                    Choose your output token and execute the swap
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
         ) : activeTab === 'balance' ? (
           <>
             {isLoadingTokens ? (
@@ -1606,19 +1924,21 @@ export default function Home() {
                           </div>
                         )}
                       </div>
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        disabled={isDisabled}
-                        onChange={() => !isDisabled && handleTokenToggle(token.symbol)}
+                      <div
+                        className={`${styles.tokenCheckboxMinimal} ${isSelected ? styles.tokenCheckboxMinimalSelected : ''}`}
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (isDisabled) {
-                            e.preventDefault();
+                          if (!isDisabled) {
+                            handleTokenToggle(token.symbol);
                           }
                         }}
-                        className={styles.tokenCheckbox}
-                      />
+                      >
+                        {isSelected && (
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                            <path d="M13.3333 4L6 11.3333L2.66667 8" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -1638,14 +1958,43 @@ export default function Home() {
       {/* Fixed Bottom Button with Output Token Selector */}
       {activeTab === 'balance' && (
         <div className={styles.bottomButtonContainer}>
-          {/* Output Token Selector */}
+          {/* Selection Info Bar */}
+          {isConnected && selectedTokens.size > 0 && (
+            <div className={styles.selectionInfoBar}>
+              <span className={styles.selectionCount}>{selectedTokens.size} selected</span>
+              <button
+                onClick={() => setSelectedTokens(new Set())}
+                className={styles.clearButton}
+              >
+                Clear
+              </button>
+            </div>
+          )}
+          
+          {/* One-line layout: Token button on left, Swap button on right */}
           {isConnected && (
-            <div className={styles.outputTokenSelectorBottom}>
-              <div className={styles.outputTokenSelectorWrapper}>
-                <div className={styles.outputTokenLabelBottom}>출력 토큰:</div>
+            <div className={styles.swapButtonRow}>
+              {/* Output Token Selector Button (Left) */}
+              <div 
+                className={styles.outputTokenSelectorWrapper}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
                 <button
-                  onClick={() => setShowOutputTokenSelector(!showOutputTokenSelector)}
-                  className={styles.outputTokenButtonBottom}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('Output token button clicked, current state:', showOutputTokenSelector);
+                    console.log('Available tokens:', availableOutputTokens.length);
+                    setShowOutputTokenSelector((prev) => {
+                      console.log('Setting showOutputTokenSelector to:', !prev);
+                      return !prev;
+                    });
+                  }}
+                  className={styles.outputTokenButton}
                 >
                   {outputToken.image && (
                     <TokenImage
@@ -1663,17 +2012,37 @@ export default function Home() {
                 </button>
                 
                 {showOutputTokenSelector && (
-                  <div className={styles.outputTokenDropdown}>
+                  <div 
+                    className={styles.outputTokenDropdown} 
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <div className={styles.outputTokenDropdownHeader}>출력 토큰 선택</div>
                     <div className={styles.outputTokenList}>
-                      {availableOutputTokens.map((token) => {
+                      {availableOutputTokens.length === 0 ? (
+                        <div style={{ padding: '1rem', textAlign: 'center', color: 'rgba(255, 255, 255, 0.5)' }}>
+                          토큰을 불러오는 중...
+                        </div>
+                      ) : (
+                        availableOutputTokens.map((token) => {
                         const isSelected = token.address.toLowerCase() === outputTokenAddress.toLowerCase();
                         return (
                           <button
                             key={token.address}
-                            onClick={() => {
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                            }}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              console.log('Token selected:', token.symbol, token.address);
+                              console.log('Current outputTokenAddress:', outputTokenAddress);
                               setOutputTokenAddress(token.address);
+                              console.log('Setting outputTokenAddress to:', token.address);
                               setShowOutputTokenSelector(false);
+                              console.log('Closing dropdown');
                             }}
                             className={`${styles.outputTokenOption} ${isSelected ? styles.outputTokenOptionSelected : ''}`}
                           >
@@ -1697,40 +2066,31 @@ export default function Home() {
                             )}
                           </button>
                         );
-                      })}
+                      }))}
                     </div>
                   </div>
                 )}
               </div>
-              {/* Arrow pointing to button */}
-              <div className={styles.outputTokenArrow}>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M12 5V19M12 19L19 12M12 19L5 12" stroke="rgba(255, 255, 255, 0.6)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              </div>
+              
+              {/* Swap Button (Right) */}
+              <button 
+                className={styles.swapButton}
+                disabled={selectedTokens.size === 0 || isTestingQuote}
+                onClick={handleTestQuote}
+              >
+                {isTestingQuote
+                  ? "Testing Quote API..."
+                  : selectedTokens.size === 0
+                  ? "Select tokens to swap"
+                  : (() => {
+                      const totalValue = Array.from(selectedTokens).reduce((sum, symbol) => {
+                        const token = allTokenBalances.find(t => t.symbol === symbol);
+                        return sum + (token?.usdValue || 0);
+                      }, 0);
+                      return `Swap for $${totalValue.toFixed(2)}`;
+                    })()}
+              </button>
             </div>
-          )}
-          
-          <button 
-            className={styles.swapButton}
-            disabled={selectedTokens.size === 0 || isTestingQuote}
-            onClick={handleTestQuote}
-            style={{ marginBottom: selectedTokens.size > 0 ? '0.5rem' : '0' }}
-          >
-            {isTestingQuote
-              ? "Testing Quote API..."
-              : selectedTokens.size === 0
-              ? "Select tokens to test"
-              : `Test Quote API (${selectedTokens.size} → ${outputToken.symbol})`}
-          </button>
-          {selectedTokens.size > 0 && (
-            <button 
-              className={styles.swapButton}
-              disabled={selectedTokens.size === 0}
-              style={{ opacity: 0.5 }}
-            >
-              Swap to {outputToken.symbol} (Coming Soon)
-            </button>
           )}
         </div>
       )}

@@ -109,13 +109,20 @@ export async function getOdosQuote(
 
   console.log('Odos Quote API v3 Request:', JSON.stringify(requestBody, null, 2));
 
-  const response = await fetch(`${ODOS_API_BASE_URL}/sor/quote/v3`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(requestBody),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${ODOS_API_BASE_URL}/sor/quote/v3`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    });
+  } catch (error) {
+    console.error('Odos Quote API v3 Fetch Error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Network error';
+    throw new Error(`Failed to fetch from Odos API: ${errorMessage}. Please check your internet connection.`);
+  }
 
   if (!response.ok) {
     let errorMessage: string;
@@ -175,13 +182,20 @@ export async function assembleOdosSwap(
 
   console.log('Odos Assemble API Request:', JSON.stringify(requestBody, null, 2));
 
-  const response = await fetch(`${ODOS_API_BASE_URL}/sor/assemble`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(requestBody),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${ODOS_API_BASE_URL}/sor/assemble`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    });
+  } catch (error) {
+    console.error('Odos Assemble API Fetch Error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Network error';
+    throw new Error(`Failed to fetch from Odos API: ${errorMessage}. Please check your internet connection.`);
+  }
 
   if (!response.ok) {
     let errorMessage: string;

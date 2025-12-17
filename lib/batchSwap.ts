@@ -3,8 +3,12 @@ import { numberToHex, encodeFunctionData, type Address, type Hex, createPublicCl
 import { base as baseChain } from 'viem/chains';
 import { ERC20_ABI } from './constants';
 
-// Odos Router address on Base
-const ODOS_ROUTER_ADDRESS = '0x4e3288c9ca110bcc42bfa01046729385107d5f02' as Address;
+// 0x AllowanceHolder contract address on Base
+// This is the contract that needs approval for 0x swaps
+export const ZEROEX_ALLOWANCE_HOLDER = '0x0000000000001fF3684f28c67538d4D072C22734' as Address;
+
+// Legacy: Odos Router address on Base (kept for reference)
+export const ODOS_ROUTER_ADDRESS = '0x4e3288c9ca110bcc42bfa01046729385107d5f02' as Address;
 
 /**
  * Check if token approval is sufficient for swap
@@ -13,7 +17,7 @@ export async function checkTokenApproval(
   tokenAddress: Address,
   ownerAddress: Address,
   amount: bigint,
-  spenderAddress: Address = ODOS_ROUTER_ADDRESS
+  spenderAddress: Address = ZEROEX_ALLOWANCE_HOLDER
 ): Promise<{ approved: boolean; currentAllowance: bigint; needsApproval: boolean }> {
   try {
     const publicClient = createPublicClient({

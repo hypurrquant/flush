@@ -15,12 +15,11 @@
   align-items: center;
   padding: 1.5rem;
   padding-top: max(1.5rem, env(safe-area-inset-top));
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: none;
   position: sticky;
   top: 0;
-  background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%);
+  background: transparent;
   z-index: 10;
-  backdrop-filter: blur(10px);
   gap: 1rem;
 }
 
@@ -74,14 +73,16 @@
   bottom: calc(100% + 0.5rem);
   left: 0;
   right: 0;
-  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  background: rgba(10, 10, 10, 0.98);
+  backdrop-filter: blur(20px);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 12px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-  z-index: 100;
+  z-index: 10000;
   min-width: 280px;
   max-height: 400px;
   overflow-y: auto;
+  pointer-events: auto;
 }
 
 .outputTokenDropdownHeader {
@@ -159,8 +160,8 @@
 /* Dust Filter Header */
 .dustFilterHeader {
   padding: 0.75rem 1.5rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.02);
+  border-bottom: none;
+  background: transparent;
   display: flex;
   justify-content: flex-end;
 }
@@ -192,12 +193,13 @@
   gap: 0.25rem;
   background: transparent;
   border: none;
+  border-bottom: 2px solid transparent;
   color: rgba(255, 255, 255, 0.5);
   cursor: pointer;
   transition: all 0.2s ease;
-  padding: 0.5rem;
-  min-height: 64px; /* Minimum touch target size with icon + label (44px + padding) */
-  min-width: 64px;
+  padding: 0.75rem 0.5rem;
+  min-height: 44px; /* Minimum touch target size */
+  min-width: 44px;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -206,33 +208,23 @@
 }
 
 .bottomNavItemActive {
-  color: #f7d954;
+  color: white;
+  border-bottom-color: white;
 }
 
 .bottomNavItemActive .bottomNavLabel {
-  color: #f7d954;
+  color: white;
   font-weight: 600;
 }
 
 .bottomNavLabel {
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   font-weight: 500;
   color: rgba(255, 255, 255, 0.5);
   transition: all 0.2s ease;
   text-align: center;
   line-height: 1.2;
   white-space: nowrap;
-}
-
-.bottomNavItem svg {
-  width: 24px;
-  height: 24px;
-  stroke: currentColor;
-  transition: all 0.2s ease;
-}
-
-.bottomNavItemActive svg {
-  stroke: #f7d954;
 }
 
 .toggleContainer {
@@ -332,12 +324,13 @@
   display: flex;
   flex-direction: column;
   flex: 1;
+  gap: 0.25rem;
 }
 
 .label {
-  font-size: 0.875rem;
-  color: rgba(255, 255, 255, 0.6);
-  margin-bottom: 0.25rem;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 0;
 }
 
 .value {
@@ -347,10 +340,10 @@
 }
 
 .totalSwapped {
-  font-size: 0.875rem;
-  color: rgba(255, 255, 255, 0.6);
-  margin-top: 0.25rem;
-  font-weight: 500;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+  margin-top: 0;
+  font-weight: 400;
 }
 
 .rewardsButton {
@@ -459,10 +452,10 @@
   display: flex;
   flex-direction: column;
   gap: 0;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  overflow: hidden;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  overflow: visible;
 }
 
 .tokenItem {
@@ -470,8 +463,9 @@
   justify-content: space-between;
   align-items: center;
   padding: 1rem 1.5rem;
-  background: rgba(255, 255, 255, 0.03);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   transition: all 0.2s ease;
   cursor: pointer;
   gap: 1rem;
@@ -483,18 +477,15 @@
 }
 
 .tokenItem:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-bottom-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .tokenItemSelected {
-  background: rgba(255, 255, 255, 0.08);
-  border-bottom-color: rgba(255, 255, 255, 0.2);
+  background: transparent;
 }
 
 .tokenItemSelected:hover {
-  background: rgba(255, 255, 255, 0.12);
-  border-bottom-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .tokenInfo {
@@ -540,41 +531,35 @@
   white-space: nowrap;
 }
 
-.tokenCheckbox {
-  width: 20px;
-  height: 20px;
+.tokenCheckboxMinimal {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
   cursor: pointer;
-  accent-color: #f7d954;
   flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.1);
-  border: 2px solid rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
-  appearance: none;
-  -webkit-appearance: none;
-  position: relative;
+  background: transparent;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   transition: all 0.2s ease;
   margin-left: 0.5rem;
 }
 
-.tokenCheckbox:hover {
-  border-color: rgba(255, 255, 255, 0.4);
-  background: rgba(255, 255, 255, 0.15);
+.tokenCheckboxMinimal:hover {
+  border-color: rgba(255, 255, 255, 0.5);
 }
 
-.tokenCheckbox:checked {
-  background: #f7d954;
-  border-color: #f7d954;
+.tokenCheckboxMinimalSelected {
+  background: #9333ea;
+  border-color: #9333ea;
 }
 
-.tokenCheckbox:checked::after {
-  content: '✓';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: #000;
-  font-weight: 700;
-  font-size: 14px;
+.tokenCheckboxMinimalSelected:hover {
+  background: #a855f7;
+  border-color: #a855f7;
 }
 
 .bottomButtonContainer {
@@ -590,82 +575,90 @@
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  pointer-events: none;
 }
 
-.outputTokenSelectorBottom {
+.bottomButtonContainer > * {
+  pointer-events: auto;
+}
+
+.swapButtonRow {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
+  gap: 0.75rem;
+  width: 100%;
 }
 
 .outputTokenSelectorWrapper {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  flex: 1;
+  flex-shrink: 0;
+  z-index: 10001;
 }
 
-.outputTokenLabelBottom {
-  font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.6);
-  white-space: nowrap;
-}
-
-.outputTokenButtonBottom {
+.outputTokenButton {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
-  padding: 0.5rem 0.75rem;
+  background: transparent;
+  border: none;
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
   color: white;
   cursor: pointer;
   transition: all 0.2s ease;
   font-size: 0.875rem;
   font-weight: 500;
   min-height: 44px;
-  flex: 1;
+  white-space: nowrap;
 }
 
-.outputTokenButtonBottom:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.3);
+.outputTokenButton:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 
-.outputTokenArrow {
+.selectionInfoBar {
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  animation: bounce 2s infinite;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  background: transparent;
 }
 
-@keyframes bounce {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-4px);
-  }
+.selectionCount {
+  font-size: 0.875rem;
+  color: rgba(255, 255, 255, 0.7);
+  font-weight: 500;
+}
+
+.clearButton {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  transition: all 0.2s ease;
+}
+
+.clearButton:hover {
+  color: white;
 }
 
 .swapButton {
-  width: 100%;
-  background: #f7d954;
-  color: #000;
+  flex: 1;
+  background: #9333ea;
+  color: white;
   border: none;
-  padding: 1.25rem;
-  font-size: 1.125rem;
-  font-weight: 700;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.3s ease;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  box-shadow: 0 4px 20px rgba(247, 217, 84, 0.3);
   min-height: 44px; /* Minimum touch target size */
   display: flex;
   align-items: center;
@@ -673,13 +666,12 @@
 }
 
 .swapButton:hover:not(:disabled) {
-  background: #f5d73a;
+  background: #a855f7;
   transform: translateY(-2px);
-  box-shadow: 0 6px 25px rgba(247, 217, 84, 0.4);
 }
 
 .swapButton:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
@@ -711,17 +703,12 @@
   }
 
   .bottomNavItem {
-    min-height: 60px;
-    padding: 0.375rem 0.5rem;
+    min-height: 44px;
+    padding: 0.5rem 0.375rem;
   }
 
   .bottomNavLabel {
-    font-size: 0.7rem;
-  }
-
-  .bottomNavItem svg {
-    width: 22px;
-    height: 22px;
+    font-size: 0.75rem;
   }
 }
 
@@ -1475,4 +1462,110 @@
   color: rgba(255, 255, 255, 0.7);
   font-size: 0.875rem;
   font-weight: 500;
+}
+
+/* Wallet Connection Button */
+.connectWalletButton {
+  background: linear-gradient(135deg, #9333ea 0%, #7c3aed 100%);
+  color: white;
+  border: none;
+  padding: 0.75rem 1.25rem;
+  border-radius: 12px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.connectWalletButton:hover {
+  background: linear-gradient(135deg, #a855f7 0%, #8b5cf6 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 20px rgba(147, 51, 234, 0.3);
+}
+
+/* Wallet Selection Modal */
+.walletModal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(8px);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.walletModalContent {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  max-width: 400px;
+  width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.walletModalHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.walletModalHeader h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: white;
+}
+
+.walletList {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.walletOption {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  color: white;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  width: 100%;
+  text-align: left;
+  min-height: 60px;
+}
+
+.walletOption:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-2px);
+}
+
+.walletOption:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.walletIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  flex-shrink: 0;
 }

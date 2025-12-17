@@ -28,7 +28,12 @@ export function RootProvider({ children }: { children: ReactNode }) {
             },
             wallet: {
               display: "modal",
-              preference: "all", // 모든 지갑 표시 (EIP-6963 지원 지갑 포함)
+              preference: "all",
+              supportedWallets: {
+                rabby: true,
+                trust: true,
+                frame: true,
+              },
             },
           }}
           miniKit={{
