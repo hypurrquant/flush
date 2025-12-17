@@ -1569,3 +1569,243 @@
   border-radius: 8px;
   flex-shrink: 0;
 }
+
+/* History Tab Styles */
+.historyContainer {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.historyStats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+}
+
+.historyStatItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  text-align: center;
+}
+
+.historyStatValue {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: white;
+}
+
+.historyStatLabel {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.historyList {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.historyDateGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.historyDateHeader {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.6);
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.historyItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  gap: 1rem;
+  transition: all 0.2s ease;
+}
+
+.historyItem:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.historyItemLeft {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.historyItemIcon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.historyBatchIcon {
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, #9333ea, #7c3aed);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: white;
+}
+
+.historyTokenImage {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+
+.historyItemInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.historyItemTitle {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: white;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.historyItemTokens {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.historyTokenBadge {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.historyItemRight {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.historyItemAmount {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #22c55e;
+}
+
+.historyItemMeta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+}
+
+.historyItemTime {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.historyItemStatus {
+  color: #22c55e;
+  font-size: 0.875rem;
+}
+
+.historyItemLink {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.historyItemLink:hover {
+  color: #9333ea;
+}
+
+.historyEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 1.5rem;
+  text-align: center;
+  gap: 0.75rem;
+}
+
+.historyEmptyIcon {
+  font-size: 3rem;
+  opacity: 0.5;
+}
+
+.historyEmptyTitle {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: white;
+}
+
+.historyEmptyText {
+  font-size: 0.875rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+@media (max-width: 480px) {
+  .historyStats {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
+    padding: 0.75rem;
+  }
+
+  .historyStatValue {
+    font-size: 1rem;
+  }
+
+  .historyStatLabel {
+    font-size: 0.625rem;
+  }
+
+  .historyItem {
+    padding: 0.75rem;
+  }
+
+  .historyItemIcon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .historyBatchIcon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .historyTokenImage {
+    width: 36px;
+    height: 36px;
+  }
+}

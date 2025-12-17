@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useMiniKit } from "@coinbase/onchainkit/minikit";
 import { TokenChip } from "@coinbase/onchainkit/token";
 import type { Token } from "@coinbase/onchainkit/token";
@@ -33,8 +33,9 @@ import { sendNotification, NotificationTemplates } from "../lib/notifications";
 import { TokenImage } from "../components/TokenImage";
 import { BottomNavigation } from "../components/BottomNavigation";
 import { RewardsTab } from "../components/RewardsTab";
+import { HistoryTab } from "../components/HistoryTab";
 import type { Hex, Address as ViemAddress } from "viem";
-import { numberToHex, parseEventLogs } from "viem";
+import { parseEventLogs } from "viem";
 import styles from "./page.module.css";
 
 interface TokenBalanceData {
@@ -83,6 +84,10 @@ export default function Home() {
     transactionHash?: string;
   } | null>(null);
   
+  // Auto-swap after approve
+  const [readyToSwap, setReadyToSwap] = useState(false);
+  const swapButtonWrapperRef = useRef<HTMLDivElement>(null);
+
   // Transaction simulation state
   const [isSimulating, setIsSimulating] = useState(false);
   const [simulationResult, setSimulationResult] = useState<'success' | 'failed' | null>(null);
@@ -129,6 +134,22 @@ export default function Home() {
       fetchUserFid();
     }
   }, [isConnected]);
+
+  // Auto-trigger swap after approve completes
+  useEffect(() => {
+    if (readyToSwap && swapButtonWrapperRef.current) {
+      // Small delay to ensure UI is updated
+      const timer = setTimeout(() => {
+        const button = swapButtonWrapperRef.current?.querySelector('button');
+        if (button) {
+          console.log('Auto-triggering swap after approve...');
+          button.click();
+        }
+        setReadyToSwap(false);
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [readyToSwap]);
 
   // Close output token selector when clicking outside
   useEffect(() => {
@@ -1059,28 +1080,13 @@ export default function Home() {
                       );
                     })()}
                     
-                    {quoteResult.gasEstimateValue !== undefined && (
-                      <>
-                        <div className={styles.swapPreviewSummaryRow}>
-                          <div className={styles.swapPreviewSummaryLabel}>예상 가스 비용</div>
-                          <div className={styles.swapPreviewSummaryValue}>
-                            ${quoteResult.gasEstimateValue.toFixed(4)}
-                          </div>
+                    {quoteResult.gasEstimate != null && quoteResult.gasEstimate > 0 && (
+                      <div className={styles.swapPreviewSummaryRow}>
+                        <div className={styles.swapPreviewSummaryLabel}>예상 가스</div>
+                        <div className={styles.swapPreviewSummaryValue}>
+                          {quoteResult.gasEstimate.toLocaleString()} units
                         </div>
-                        {quoteResult.gasEstimateValue > 2 && (
-                          <div style={{
-                            padding: '0.75rem',
-                            background: 'rgba(251, 191, 36, 0.1)',
-                            border: '1px solid rgba(251, 191, 36, 0.3)',
-                            borderRadius: '8px',
-                            fontSize: '0.75rem',
-                            color: '#fbbf24',
-                            marginTop: '0.5rem'
-                          }}>
-                            💡 가스비 절약 팁: 이미 approve된 토큰은 다음 스왑부터 가스비가 절약됩니다. 첫 스왑은 approve 비용이 포함되어 가스비가 높을 수 있습니다.
-                          </div>
-                        )}
-                      </>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1128,17 +1134,10 @@ export default function Home() {
                   {quoteResult.gasEstimate != null && (
                     <div className={styles.quoteInfoRow}>
                       <div className={styles.quoteInfoLabel}>Gas Estimate</div>
-                      <div className={styles.quoteInfoValue}>{quoteResult.gasEstimate.toLocaleString()}</div>
+                      <div className={styles.quoteInfoValue}>{quoteResult.gasEstimate.toLocaleString()} units</div>
                     </div>
                   )}
-                  
-                  {quoteResult.gasEstimateValue !== undefined && (
-                    <div className={styles.quoteInfoRow}>
-                      <div className={styles.quoteInfoLabel}>Gas Cost</div>
-                      <div className={styles.quoteInfoValue}>${quoteResult.gasEstimateValue.toFixed(4)}</div>
-                    </div>
-                  )}
-                  
+
                   {quoteResult.netOutValue !== undefined && (
                     <div className={styles.quoteInfoRow}>
                       <div className={styles.quoteInfoLabel}>Net Out Value</div>
@@ -1378,6 +1377,8 @@ export default function Home() {
                             setIsApproving(false);
                             // Trigger simulation after approvals complete
                             setSimulationResult(null);
+                            // Auto-trigger swap after approve
+                            setReadyToSwap(true);
                           } else if (status.statusName === 'error') {
                             setIsApproving(false);
                           }
@@ -1718,10 +1719,12 @@ export default function Home() {
                         }
                       }}
                     >
-                      <TransactionButton 
-                        className={styles.swapButton} 
-                        text={buttonText}
-                      />
+                      <div ref={swapButtonWrapperRef}>
+                        <TransactionButton
+                          className={styles.swapButton}
+                          text={buttonText}
+                        />
+                      </div>
                       <TransactionStatus>
                         <TransactionStatusLabel />
                         <TransactionStatusAction />
@@ -1946,12 +1949,16 @@ export default function Home() {
             )}
           </>
         ) : activeTab === 'swapHistory' ? (
-          <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
-            <div style={{ marginBottom: '1rem' }}>Swap History</div>
-            <div style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.5)' }}>
-              No swap history yet
-            </div>
-          </div>
+          <HistoryTab
+            address={address}
+            tokenList={tokenList.map(t => ({
+              address: t.address,
+              symbol: t.symbol,
+              name: t.name,
+              decimals: t.decimals,
+              image: t.image || null,
+            }))}
+          />
         ) : null}
       </div>
 

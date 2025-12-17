@@ -49,6 +49,8 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const userAddress = searchParams.get('userAddress');
+    const limit = parseInt(searchParams.get('limit') || '50');
+    const offset = parseInt(searchParams.get('offset') || '0');
 
     if (!userAddress) {
       return NextResponse.json(
@@ -57,35 +59,39 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get user's total swap stats
-    const { data, error } = await supabase
+    // Get user's swap history with pagination
+    const { data: swaps, error } = await supabase
       .from('swaps')
-      .select('total_swap_amount, fees')
-      .eq('user_address', userAddress.toLowerCase());
+      .select('*')
+      .eq('user_address', userAddress.toLowerCase())
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
 
     if (error) {
       console.error('Supabase error:', error);
       return NextResponse.json(
-        { error: 'Failed to fetch swap stats', details: error.message },
+        { error: 'Failed to fetch swap history', details: error.message },
         { status: 500 }
       );
     }
 
-    const totalSwapAmount = data?.reduce(
+    // Calculate totals
+    const totalSwapAmount = swaps?.reduce(
       (sum, record) => sum + (parseFloat(record.total_swap_amount) || 0),
       0
     ) || 0;
 
-    const totalFees = data?.reduce(
+    const totalFees = swaps?.reduce(
       (sum, record) => sum + (parseFloat(record.fees) || 0),
       0
     ) || 0;
 
     return NextResponse.json({
       success: true,
+      swaps: swaps || [],
       totalSwapAmount,
       totalFees,
-      swapCount: data?.length || 0,
+      swapCount: swaps?.length || 0,
     });
   } catch (error) {
     console.error('API error:', error);
