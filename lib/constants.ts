@@ -75,3 +75,16 @@ export const ERC20_ABI = [
   },
 ] as const;
 
+// ERC20 Transfer event ABI for parsing transaction receipts
+export const ERC20_TRANSFER_EVENT_ABI = [
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, name: 'from', type: 'address' },
+      { indexed: true, name: 'to', type: 'address' },
+      { indexed: false, name: 'value', type: 'uint256' },
+    ],
+    name: 'Transfer',
+    type: 'event',
+  },
+] as const;

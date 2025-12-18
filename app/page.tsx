@@ -22,11 +22,11 @@ import {
   TransactionStatusLabel,
   TransactionStatusAction,
 } from "@coinbase/onchainkit/transaction";
-import { useAccount, useBalance, usePublicClient } from "wagmi";
+import { useAccount, useBalance, usePublicClient, useCallsStatus, useSendCalls, useSendTransaction, useWaitForTransactionReceipt } from "wagmi";
 import { base } from "wagmi/chains";
 import { formatTokenBalance } from "../lib/tokenUtils";
 import { fetchPopularTokensList, type TokenInfo } from "../lib/tokenList";
-import { USDC_ADDRESS } from "../lib/constants";
+import { USDC_ADDRESS, ERC20_TRANSFER_EVENT_ABI } from "../lib/constants";
 import { getZeroExCombinedQuote, getZeroExTransactions, type ZeroExCombinedQuote, FEE_CONFIG } from "../lib/zeroex";
 import { checkTokenApproval, createApproveCall, checkBatchCapabilities } from "../lib/batchSwap";
 import { sendNotification, NotificationTemplates } from "../lib/notifications";
@@ -35,8 +35,13 @@ import { BottomNavigation } from "../components/BottomNavigation";
 import { RewardsTab } from "../components/RewardsTab";
 import { HistoryTab } from "../components/HistoryTab";
 import type { Hex, Address as ViemAddress } from "viem";
-import { parseEventLogs } from "viem";
+import { parseEventLogs, formatUnits } from "viem";
 import styles from "./page.module.css";
+
+// Helper function to format BigInt amounts with proper decimal precision
+function formatBigIntAmount(amount: bigint, decimals: number): string {
+  return formatUnits(amount, decimals);
+}
 
 interface TokenBalanceData {
   address: string;
@@ -94,7 +99,13 @@ export default function Home() {
   const [simulationResult, setSimulationResult] = useState<'success' | 'failed' | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<Array<{ tokenAddress: string; symbol: string }>>([]);
   const [isApproving, setIsApproving] = useState(false);
-  
+  const [isSwapping, setIsSwapping] = useState(false);
+  const [isConfirmingReceipt, setIsConfirmingReceipt] = useState(false); // Track receipt confirmation
+  const swapInitiatedRef = useRef(false); // Use ref to avoid closure issues
+  const [transactionKey, setTransactionKey] = useState(0); // Key to force remount Transaction components
+  const pendingTxHashRef = useRef<string | null>(null); // Track pending transaction hash
+  const [pendingCallId, setPendingCallId] = useState<string | null>(null); // Track batch call ID for EIP-5792
+
   // Transaction error state
   const [swapError, setSwapError] = useState<{
     message: string;
@@ -107,6 +118,20 @@ export default function Home() {
   const [outputTokenAddress, setOutputTokenAddress] = useState<string>(USDC_ADDRESS); // default: USDC
 
   const DUST_THRESHOLD = 1; // Consider tokens under $1 as dust
+
+  // useSendCalls hook for direct batch transaction control (Smart Wallets)
+  const { sendCallsAsync, isPending: isSendingCalls } = useSendCalls();
+
+  // useSendTransaction hook for EOA wallets (non-batch)
+  const { sendTransactionAsync, isPending: isSendingTransaction, data: pendingTxHash } = useSendTransaction();
+
+  // Wait for transaction receipt (for EOA transactions)
+  const { data: txReceipt, isLoading: isWaitingForReceipt } = useWaitForTransactionReceipt({
+    hash: pendingTxHash,
+  });
+
+  // State for pending success transaction hash (to be processed after allTokenBalances is available)
+  const [pendingSuccessTxHash, setPendingSuccessTxHash] = useState<string | null>(null);
 
   // Initialize the miniapp
   useEffect(() => {
@@ -136,21 +161,141 @@ export default function Home() {
     }
   }, [isConnected]);
 
-  // Auto-trigger swap after approve completes
+  // Reset readyToSwap state (auto-swap after approve disabled for safety)
   useEffect(() => {
-    if (readyToSwap && swapButtonWrapperRef.current) {
-      // Small delay to ensure UI is updated
-      const timer = setTimeout(() => {
-        const button = swapButtonWrapperRef.current?.querySelector('button');
-        if (button) {
-          console.log('Auto-triggering swap after approve...');
-          button.click();
-        }
-        setReadyToSwap(false);
-      }, 500);
-      return () => clearTimeout(timer);
+    if (readyToSwap) {
+      // Don't auto-trigger swap - let user manually click the button
+      console.log('Approve completed, user can now click Execute Swap button');
+      setReadyToSwap(false);
     }
   }, [readyToSwap]);
+
+  // Use EIP-5792 call status tracking for batch transactions
+  const { data: callsStatusData, isLoading: isCallsStatusLoading } = useCallsStatus({
+    id: pendingCallId || '',
+    query: {
+      enabled: !!pendingCallId && isSwapping,
+      refetchInterval: (data) => {
+        // Stop polling when confirmed or failed
+        // Status values are: 'pending' | 'success' | 'failure' | undefined
+        if (data.state.data?.status === 'success') return false;
+        if (data.state.data?.status === 'failure') return false;
+        return 2000; // Poll every 2 seconds
+      },
+    },
+  });
+
+  // Handle batch call status changes
+  useEffect(() => {
+    if (!callsStatusData || !pendingCallId) return;
+
+    console.log('Batch call status update:', callsStatusData);
+
+    if (callsStatusData.status === 'success' && callsStatusData.receipts && callsStatusData.receipts.length > 0) {
+      console.log('Batch transaction confirmed via useCallsStatus:', callsStatusData.receipts);
+      const txHash = callsStatusData.receipts[0]?.transactionHash;
+      if (txHash) {
+        pendingTxHashRef.current = txHash;
+        // Set pending success hash to trigger receipt processing
+        setIsSwapping(false);
+        setIsConfirmingReceipt(true);
+        setPendingSuccessTxHash(txHash);
+      }
+      setPendingCallId(null);
+    } else if (callsStatusData.status === 'failure') {
+      console.error('Batch transaction failed:', callsStatusData);
+      setSwapError({
+        message: 'Transaction failed. Please try again.',
+        isSimulationError: false,
+        canRetry: true,
+      });
+      setIsSwapping(false);
+      setIsConfirmingReceipt(false);
+      swapInitiatedRef.current = false;
+      setPendingCallId(null);
+    }
+  }, [callsStatusData, pendingCallId]);
+
+  // Handle EOA transaction receipt (for non-batch transactions)
+  useEffect(() => {
+    if (!txReceipt || !isSwapping) return;
+
+    console.log('EOA transaction receipt received:', txReceipt);
+
+    if (txReceipt.status === 'success') {
+      // Set pending success hash to trigger receipt processing
+      setIsSwapping(false);
+      setIsConfirmingReceipt(true);
+      setPendingSuccessTxHash(txReceipt.transactionHash);
+    } else {
+      // Transaction failed
+      setSwapError({
+        message: 'Transaction failed on chain. Please try again.',
+        isSimulationError: false,
+        canRetry: true,
+      });
+      setIsSwapping(false);
+      setIsConfirmingReceipt(false);
+      swapInitiatedRef.current = false;
+    }
+  }, [txReceipt, isSwapping]);
+
+  // Poll for transaction receipt as a fallback
+  useEffect(() => {
+    if (!isSwapping || !pendingTxHashRef.current || !publicClient) return;
+
+    let cancelled = false;
+    let attempts = 0;
+    const maxAttempts = 60; // Max 60 attempts (2 minutes with 2s interval)
+
+    const pollReceipt = async () => {
+      if (cancelled || !pendingTxHashRef.current) return;
+
+      attempts++;
+      console.log(`Polling for receipt (attempt ${attempts}):`, pendingTxHashRef.current);
+
+      try {
+        const receipt = await publicClient.getTransactionReceipt({
+          hash: pendingTxHashRef.current as `0x${string}`,
+        });
+
+        if (receipt && !cancelled) {
+          console.log('Receipt found via polling:', receipt);
+          // Transaction confirmed - set pending success hash
+          if (isSwapping && pendingTxHashRef.current) {
+            console.log('Transaction confirmed but still in swapping state - triggering success');
+            setIsSwapping(false);
+            setIsConfirmingReceipt(true);
+            setPendingSuccessTxHash(pendingTxHashRef.current);
+            pendingTxHashRef.current = null;
+          }
+        }
+      } catch (error) {
+        // Receipt not yet available, continue polling
+        if (attempts < maxAttempts && !cancelled) {
+          setTimeout(pollReceipt, 2000);
+        } else if (attempts >= maxAttempts) {
+          console.warn('Max polling attempts reached');
+          // Reset swapping state but show an error
+          setIsSwapping(false);
+          setIsConfirmingReceipt(false);
+          setSwapError({
+            message: 'Transaction may have succeeded but receipt could not be verified. Please check your wallet.',
+            isSimulationError: false,
+            canRetry: false,
+          });
+        }
+      }
+    };
+
+    // Start polling after a short delay
+    const timer = setTimeout(pollReceipt, 3000);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [isSwapping, publicClient]);
 
   // Close output token selector when clicking outside
   useEffect(() => {
@@ -252,30 +397,34 @@ export default function Home() {
         const validTokens = tokens.filter(token => token.address && token.address.trim() !== '');
         setTokenList(validTokens);
 
-        // Fetch balances for all tokens via API
-        const balancePromises = validTokens.map(async (token) => {
-          try {
-            if (!token.address || token.address.trim() === '') {
-              return { address: token.address, balance: 0n };
-            }
-            const response = await fetch(`/api/token-balance?address=${address}&tokenAddress=${token.address}`);
-            if (response.ok) {
-              const data = await response.json();
-              return { address: token.address, balance: BigInt(data.balance || '0') };
-            }
-            return { address: token.address, balance: 0n };
-          } catch (error) {
-            console.error(`Failed to fetch balance for ${token.symbol}:`, error);
-            return { address: token.address, balance: 0n };
-          }
-        });
+        // Fetch balances for all tokens via batch API (single multicall)
+        try {
+          const tokenAddresses = validTokens.map(t => t.address).filter(addr => addr && addr.trim() !== '');
+          const response = await fetch('/api/token-balances-batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ address, tokenAddresses }),
+          });
 
-        const balances = await Promise.all(balancePromises);
-        const balanceMap = new Map<string, bigint>();
-        balances.forEach(({ address, balance }) => {
-          balanceMap.set(address, balance);
-        });
-        setTokenBalances(balanceMap);
+          if (response.ok) {
+            const data = await response.json();
+            const balanceMap = new Map<string, bigint>();
+            Object.entries(data.balances || {}).forEach(([tokenAddr, balance]) => {
+              // Store with original case and lowercase for lookup flexibility
+              balanceMap.set(tokenAddr, BigInt(balance as string || '0'));
+              balanceMap.set(tokenAddr.toLowerCase(), BigInt(balance as string || '0'));
+              // Also store with original token address case from validTokens
+              const originalToken = validTokens.find(t => t.address.toLowerCase() === tokenAddr.toLowerCase());
+              if (originalToken) {
+                balanceMap.set(originalToken.address, BigInt(balance as string || '0'));
+              }
+            });
+            setTokenBalances(balanceMap);
+          }
+        } catch (error) {
+          console.error('Failed to fetch token balances:', error);
+          setTokenBalances(new Map());
+        }
 
         // Fetch token prices by symbols and addresses
         const symbols = ['ETH', ...tokens.map(t => t.symbol)];
@@ -321,39 +470,44 @@ export default function Home() {
     loadTokens();
   }, [isConnected, address]);
 
-  // Refetch balances periodically
+  // Refetch balances periodically (using batch API)
   useEffect(() => {
     if (!isConnected || !address || tokenList.length === 0) return;
 
     const interval = setInterval(async () => {
       // Filter out tokens with empty or invalid addresses
-      const validTokens = tokenList.filter(token => 
-        token.address && 
+      const validTokens = tokenList.filter(token =>
+        token.address &&
         token.address.trim() !== ''
       );
-      
-      if (validTokens.length === 0) return;
-      
-      const balancePromises = validTokens.map(async (token) => {
-        try {
-          const response = await fetch(`/api/token-balance?address=${address}&tokenAddress=${token.address}`);
-          if (response.ok) {
-            const data = await response.json();
-            return { address: token.address, balance: BigInt(data.balance || '0') };
-          }
-          return { address: token.address, balance: 0n };
-        } catch {
-          return { address: token.address, balance: 0n };
-        }
-      });
 
-      const balances = await Promise.all(balancePromises);
-      const balanceMap = new Map<string, bigint>();
-      balances.forEach(({ address, balance }) => {
-        balanceMap.set(address, balance);
-      });
-      setTokenBalances(balanceMap);
-    }, 5000); // 5초마다 새로고침
+      if (validTokens.length === 0) return;
+
+      try {
+        const tokenAddresses = validTokens.map(t => t.address);
+        const response = await fetch('/api/token-balances-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address, tokenAddresses }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const balanceMap = new Map<string, bigint>();
+          Object.entries(data.balances || {}).forEach(([tokenAddr, balance]) => {
+            balanceMap.set(tokenAddr, BigInt(balance as string || '0'));
+            balanceMap.set(tokenAddr.toLowerCase(), BigInt(balance as string || '0'));
+            const originalToken = validTokens.find(t => t.address.toLowerCase() === tokenAddr.toLowerCase());
+            if (originalToken) {
+              balanceMap.set(originalToken.address, BigInt(balance as string || '0'));
+            }
+          });
+          setTokenBalances(balanceMap);
+        }
+      } catch (error) {
+        console.error('Failed to refresh token balances:', error);
+      }
+    }, 30000); // 30초마다 새로고침
 
     return () => clearInterval(interval);
   }, [isConnected, address, tokenList]);
@@ -394,7 +548,7 @@ export default function Home() {
       } catch (error) {
         console.error('Failed to fetch token prices:', error);
       }
-    }, 10000); // 10초마다 가격 새로고침
+    }, 60000); // 60초마다 가격 새로고침
 
     return () => clearInterval(interval);
   }, [isConnected, tokenList]);
@@ -404,7 +558,7 @@ export default function Home() {
     address: address,
     query: {
       enabled: !!address,
-      refetchInterval: 5000,
+      refetchInterval: 30000, // 30초마다 새로고침
     },
   });
 
@@ -568,6 +722,155 @@ export default function Home() {
       return token.usdValue < DUST_THRESHOLD;
     }).length;
   }, [allTokenBalances]);
+
+  // Process pending success transaction hash to extract actual token transfers
+  useEffect(() => {
+    if (!pendingSuccessTxHash || !publicClient || !address) return;
+
+    const processSuccessTransaction = async () => {
+      console.log('Processing success transaction:', pendingSuccessTxHash);
+
+      try {
+        const receipt = await publicClient.getTransactionReceipt({
+          hash: pendingSuccessTxHash as `0x${string}`,
+        });
+
+        console.log('Got receipt for success processing:', receipt);
+
+        if (receipt) {
+          // Parse Transfer events to get actual tokens sent and received
+          const transferLogs = parseEventLogs({
+            abi: ERC20_TRANSFER_EVENT_ABI,
+            logs: receipt.logs,
+            eventName: 'Transfer',
+          });
+
+          console.log('Parsed transfer logs:', transferLogs);
+
+          // Separate tokens sent (from user) and received (to user)
+          const userAddressLower = address.toLowerCase();
+          const inputTokensMap = new Map<string, bigint>();
+          const outputTokensMap = new Map<string, bigint>();
+
+          for (const log of transferLogs) {
+            const tokenAddress = log.address.toLowerCase();
+            const from = (log.args.from as string).toLowerCase();
+            const to = (log.args.to as string).toLowerCase();
+            const value = log.args.value as bigint;
+
+            if (from === userAddressLower) {
+              // Token sent by user
+              const existing = inputTokensMap.get(tokenAddress) || BigInt(0);
+              inputTokensMap.set(tokenAddress, existing + value);
+            }
+            if (to === userAddressLower) {
+              // Token received by user
+              const existing = outputTokensMap.get(tokenAddress) || BigInt(0);
+              outputTokensMap.set(tokenAddress, existing + value);
+            }
+          }
+
+          console.log('Input tokens map:', inputTokensMap);
+          console.log('Output tokens map:', outputTokensMap);
+
+          // Convert to arrays with token info
+          const inputTokens: Array<{ symbol: string; amount: string; address: string; image: string | null }> = [];
+          const outputTokens: Array<{ symbol: string; amount: string; address: string; image: string | null }> = [];
+
+          for (const [tokenAddr, amount] of inputTokensMap.entries()) {
+            const tokenInfo = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddr) ||
+                             tokenList.find(t => t.address.toLowerCase() === tokenAddr);
+            if (tokenInfo) {
+              inputTokens.push({
+                symbol: tokenInfo.symbol,
+                amount: formatBigIntAmount(amount, tokenInfo.decimals),
+                address: tokenAddr,
+                image: tokenInfo.image || null,
+              });
+            } else {
+              // Unknown token - show with minimal info
+              inputTokens.push({
+                symbol: `${tokenAddr.slice(0, 6)}...`,
+                amount: formatBigIntAmount(amount, 18), // assume 18 decimals
+                address: tokenAddr,
+                image: null,
+              });
+            }
+          }
+
+          for (const [tokenAddr, amount] of outputTokensMap.entries()) {
+            const tokenInfo = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddr) ||
+                             tokenList.find(t => t.address.toLowerCase() === tokenAddr);
+            if (tokenInfo) {
+              outputTokens.push({
+                symbol: tokenInfo.symbol,
+                amount: formatBigIntAmount(amount, tokenInfo.decimals),
+                address: tokenAddr,
+                image: tokenInfo.image || null,
+              });
+            } else {
+              // Unknown token - show with minimal info
+              outputTokens.push({
+                symbol: `${tokenAddr.slice(0, 6)}...`,
+                amount: formatBigIntAmount(amount, 18), // assume 18 decimals
+                address: tokenAddr,
+                image: null,
+              });
+            }
+          }
+
+          console.log('Final input tokens:', inputTokens);
+          console.log('Final output tokens:', outputTokens);
+
+          // Set swap success data
+          setSwapSuccessData({
+            inputTokens,
+            outputTokens,
+            transactionHash: pendingSuccessTxHash,
+          });
+
+          // Send notification if we have FID
+          if (userFid && outputTokens.length > 0) {
+            sendNotification(
+              userFid,
+              NotificationTemplates.swapSuccess(inputTokens.length, outputTokens[0].symbol)
+            ).catch(err => console.warn('Failed to send notification:', err));
+          }
+
+          // Reset states
+          setIsConfirmingReceipt(false);
+          swapInitiatedRef.current = false;
+          setSelectedTokens(new Set());
+          setTokenAmounts(new Map());
+          setQuoteResult(null);
+          setApprovalStatuses(new Map());
+          setTransactionKey(prev => prev + 1);
+          pendingTxHashRef.current = null;
+        }
+      } catch (error) {
+        console.error('Error processing success transaction:', error);
+        // Even on error, show basic success modal
+        setSwapSuccessData({
+          inputTokens: [],
+          outputTokens: [],
+          transactionHash: pendingSuccessTxHash,
+        });
+        setIsConfirmingReceipt(false);
+        swapInitiatedRef.current = false;
+        setSelectedTokens(new Set());
+        setTokenAmounts(new Map());
+        setQuoteResult(null);
+        setApprovalStatuses(new Map());
+        setTransactionKey(prev => prev + 1);
+        pendingTxHashRef.current = null;
+      } finally {
+        // Clear the pending hash
+        setPendingSuccessTxHash(null);
+      }
+    };
+
+    processSuccessTransaction();
+  }, [pendingSuccessTxHash, publicClient, address, allTokenBalances, tokenList, userFid]);
 
   // Mock data for swap history (will be replaced with actual data later)
   const totalSwappedAmount = 0; // TODO: Fetch from API
@@ -771,7 +1074,7 @@ export default function Home() {
     } finally {
       setIsTestingQuote(false);
     }
-  }, [address, selectedTokens, outputTokenAddress, slippageLimitPercent, allTokenBalances, tokenBalances, ethBalance, tokenList]);
+  }, [address, selectedTokens, outputTokenAddress, slippageLimitPercent, allTokenBalances, tokenBalances, ethBalance, tokenList, tokenAmounts]);
 
   // Prepare swap transaction calls (used as Promise for Transaction component)
   // This only includes swap call, not approve calls (approve is handled separately)
@@ -1378,14 +1681,17 @@ export default function Home() {
                     
                     return (
                       <Transaction
+                        key={`approve-${transactionKey}`}
                         chainId={base.id}
                         calls={prepareApproveCalls}
                         isSponsored={true}
                         onStatus={(status) => {
+                          const statusAny = status as { statusName: string; statusData?: unknown };
                           console.log('Approve transaction status:', status);
-                          if (status.statusName === 'init') {
+                          // Set approving state only when transaction is in progress
+                          if (status.statusName === 'transactionPending') {
                             setIsApproving(true);
-                          } else if (status.statusName === 'success') {
+                          } else if (statusAny.statusName === 'success' || statusAny.statusName === 'transactionConfirmed') {
                             // Approve completed, update approval statuses
                             const updatedStatuses = new Map(approvalStatuses);
                             pendingApprovals.forEach(token => {
@@ -1403,8 +1709,12 @@ export default function Home() {
                             setIsApproving(false);
                             // Trigger simulation after approvals complete
                             setSimulationResult(null);
-                            // Auto-trigger swap after approve
-                            setReadyToSwap(true);
+                            // Reset swap state for fresh swap Transaction component
+                            swapInitiatedRef.current = false;
+                            setIsSwapping(false);
+                            setIsConfirmingReceipt(false);
+                            // Increment transaction key to force fresh swap Transaction component
+                            setTransactionKey(prev => prev + 1);
                           } else if (status.statusName === 'error') {
                             setIsApproving(false);
                           }
@@ -1431,6 +1741,34 @@ export default function Home() {
                     );
                   }
 
+                  // If swapping, show loading state
+                  if (isSwapping) {
+                    return (
+                      <button className={styles.swapButton} disabled>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style={{ animation: 'spin 1s linear infinite' }}>
+                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeDasharray="60" strokeDashoffset="20" />
+                          </svg>
+                          Swapping...
+                        </span>
+                      </button>
+                    );
+                  }
+
+                  // If confirming receipt, show loading state
+                  if (isConfirmingReceipt) {
+                    return (
+                      <button className={styles.swapButton} disabled>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style={{ animation: 'spin 1s linear infinite' }}>
+                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeDasharray="60" strokeDashoffset="20" />
+                          </svg>
+                          Confirming...
+                        </span>
+                      </button>
+                    );
+                  }
+
                   // Show swap button - clicking will trigger simulation first
                   const buttonText = 'Execute Swap';
 
@@ -1447,315 +1785,247 @@ export default function Home() {
 
                     return await prepareSwapCalls();
                   };
-                  
-                  return (
-                    <Transaction
-                      chainId={base.id}
-                      calls={prepareSwapCallsWithSimulation}
-                      isSponsored={true}
-                      onStatus={async (status) => {
-                        console.log('Transaction status:', status);
-                        console.log('Transaction statusData:', status.statusData);
-                        if (status.statusName === 'success') {
-                          // Parse transaction receipt and prepare success data
-                          const statusData = status.statusData as { transactionReceipts?: Array<{ transactionHash?: string }>; transactionHash?: string };
-                          const receipts = statusData?.transactionReceipts;
-                          const transactionHash = receipts?.[0]?.transactionHash || statusData?.transactionHash;
-                          
-                          console.log('Transaction hash:', transactionHash);
-                          
-                          // Fetch actual token transfers from transaction logs
-                          const inputTokensData: Array<{ symbol: string; amount: string; address: string; image: string | null }> = [];
-                          const outputTokensData: Array<{ symbol: string; amount: string; address: string; image: string | null }> = [];
-                          
-                          if (transactionHash && publicClient && address) {
-                            try {
-                              // Get transaction receipt
-                              const receipt = await publicClient.getTransactionReceipt({
-                                hash: transactionHash as Hex,
-                              });
-                              
-                              // Parse Transfer events from logs
-                              const transferEvents = parseEventLogs({
-                                abi: [{
-                                  type: 'event',
-                                  name: 'Transfer',
-                                  inputs: [
-                                    { type: 'address', indexed: true, name: 'from' },
-                                    { type: 'address', indexed: true, name: 'to' },
-                                    { type: 'uint256', indexed: false, name: 'value' },
-                                  ],
-                                }],
-                                logs: receipt.logs,
-                              });
-                              
-                              const userAddressLower = address.toLowerCase();
-                              
-                              // Group transfers by token address
-                              const tokenTransfers = new Map<string, { sent: bigint; received: bigint; address: string }>();
-                              
-                              for (const event of transferEvents) {
-                                if (event.eventName === 'Transfer') {
-                                  const from = (event.args as { from: string; to: string; value: bigint }).from.toLowerCase();
-                                  const to = (event.args as { from: string; to: string; value: bigint }).to.toLowerCase();
-                                  const value = (event.args as { from: string; to: string; value: bigint }).value;
-                                  const tokenAddress = event.address.toLowerCase();
-                                  
-                                  // Only track transfers involving the user
-                                  if (from === userAddressLower || to === userAddressLower) {
-                                    if (!tokenTransfers.has(tokenAddress)) {
-                                      tokenTransfers.set(tokenAddress, { sent: BigInt(0), received: BigInt(0), address: event.address });
-                                    }
-                                    
-                                    const transfer = tokenTransfers.get(tokenAddress)!;
-                                    if (from === userAddressLower) {
-                                      transfer.sent += value;
-                                    }
-                                    if (to === userAddressLower) {
-                                      transfer.received += value;
-                                    }
-                                  }
-                                }
-                              }
-                              
-                              // Convert to display format
-                              for (const [tokenAddress, transfer] of tokenTransfers.entries()) {
-                                const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress) ||
-                                             tokenList.find(t => t.address.toLowerCase() === tokenAddress);
-                                
-                                if (token) {
-                                  const decimals = token.decimals || 18;
-                                  
-                                  if (transfer.sent > 0) {
-                                    const formattedAmount = (transfer.sent / BigInt(10 ** decimals)).toString();
-                                    inputTokensData.push({
-                                      symbol: token.symbol,
-                                      amount: formattedAmount,
-                                      address: transfer.address,
-                                      image: token.image || null,
-                                    });
-                                  }
-                                  
-                                  if (transfer.received > 0) {
-                                    const formattedAmount = (transfer.received / BigInt(10 ** decimals)).toString();
-                                    outputTokensData.push({
-                                      symbol: token.symbol,
-                                      amount: formattedAmount,
-                                      address: transfer.address,
-                                      image: token.image || null,
-                                    });
-                                  }
-                                }
-                              }
-                            } catch (error) {
-                              console.error('Error parsing transaction logs:', error);
-                              // Fallback to quote data if log parsing fails
-                              if (quoteResult?.inTokens && quoteResult?.inAmounts) {
-                                quoteResult.inTokens.forEach((tokenAddress, index) => {
-                                  const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
-                                               tokenList.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase());
-                                  if (token) {
-                                    const amount = quoteResult.inAmounts?.[index] || '0';
-                                    const decimals = token.decimals || 18;
-                                    const formattedAmount = (BigInt(amount) / BigInt(10 ** decimals)).toString();
-                                    inputTokensData.push({
-                                      symbol: token.symbol,
-                                      amount: formattedAmount,
-                                      address: tokenAddress,
-                                      image: token.image || null,
-                                    });
-                                  }
-                                });
-                              }
-                              if (quoteResult?.outTokens && quoteResult?.outAmounts) {
-                                quoteResult.outTokens.forEach((tokenAddress, index) => {
-                                  const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
-                                               tokenList.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
-                                               (tokenAddress.toLowerCase() === '0x0000000000000000000000000000000000000000' ? { symbol: 'ETH', decimals: 18, image: null } : null);
-                                  if (token) {
-                                    const amount = quoteResult.outAmounts?.[index] || '0';
-                                    const decimals = token.decimals || 18;
-                                    const formattedAmount = (BigInt(amount) / BigInt(10 ** decimals)).toString();
-                                    outputTokensData.push({
-                                      symbol: token.symbol,
-                                      amount: formattedAmount,
-                                      address: tokenAddress,
-                                      image: token.image || null,
-                                    });
-                                  }
-                                });
-                              }
-                            }
-                          } else {
-                            // Fallback to quote data if no transaction hash
-                            if (quoteResult?.inTokens && quoteResult?.inAmounts) {
-                              quoteResult.inTokens.forEach((tokenAddress, index) => {
-                                const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
-                                             tokenList.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase());
-                                if (token) {
-                                  const amount = quoteResult.inAmounts?.[index] || '0';
-                                  const decimals = token.decimals || 18;
-                                  const formattedAmount = (BigInt(amount) / BigInt(10 ** decimals)).toString();
-                                  inputTokensData.push({
-                                    symbol: token.symbol,
-                                    amount: formattedAmount,
-                                    address: tokenAddress,
-                                    image: token.image || null,
-                                  });
-                                }
-                              });
-                            }
-                            if (quoteResult?.outTokens && quoteResult?.outAmounts) {
-                              quoteResult.outTokens.forEach((tokenAddress, index) => {
-                                const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
-                                             tokenList.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
-                                             (tokenAddress.toLowerCase() === '0x0000000000000000000000000000000000000000' ? { symbol: 'ETH', decimals: 18, image: null } : null);
-                                if (token) {
-                                  const amount = quoteResult.outAmounts?.[index] || '0';
-                                  const decimals = token.decimals || 18;
-                                  const formattedAmount = (BigInt(amount) / BigInt(10 ** decimals)).toString();
-                                  outputTokensData.push({
-                                    symbol: token.symbol,
-                                    amount: formattedAmount,
-                                    address: tokenAddress,
-                                    image: token.image || null,
-                                  });
-                                }
-                              });
-                            }
-                          }
-                          
-                          console.log('Input tokens data:', inputTokensData);
-                          console.log('Output tokens data:', outputTokensData);
-                          
-                          // Ensure we have at least some data to show
-                          if (inputTokensData.length === 0 && outputTokensData.length === 0) {
-                            console.warn('No token data found, using quote data as fallback');
-                            // Use quote data as final fallback
-                            if (quoteResult?.inTokens && quoteResult?.inAmounts) {
-                              quoteResult.inTokens.forEach((tokenAddress, index) => {
-                                const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
-                                             tokenList.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase());
-                                if (token) {
-                                  const amount = quoteResult.inAmounts?.[index] || '0';
-                                  const decimals = token.decimals || 18;
-                                  const formattedAmount = (BigInt(amount) / BigInt(10 ** decimals)).toString();
-                                  inputTokensData.push({
-                                    symbol: token.symbol,
-                                    amount: formattedAmount,
-                                    address: tokenAddress,
-                                    image: token.image || null,
-                                  });
-                                }
-                              });
-                            }
-                            if (quoteResult?.outTokens && quoteResult?.outAmounts) {
-                              quoteResult.outTokens.forEach((tokenAddress, index) => {
-                                const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
-                                             tokenList.find(t => t.address.toLowerCase() === tokenAddress.toLowerCase()) ||
-                                             (tokenAddress.toLowerCase() === '0x0000000000000000000000000000000000000000' ? { symbol: 'ETH', decimals: 18, image: null } : null);
-                                if (token) {
-                                  const amount = quoteResult.outAmounts?.[index] || '0';
-                                  const decimals = token.decimals || 18;
-                                  const formattedAmount = (BigInt(amount) / BigInt(10 ** decimals)).toString();
-                                  outputTokensData.push({
-                                    symbol: token.symbol,
-                                    amount: formattedAmount,
-                                    address: tokenAddress,
-                                    image: token.image || null,
-                                  });
-                                }
-                              });
-                            }
-                          }
-                          
-                          // Close quote modal immediately
-                          setQuoteResult(null);
-                          setSwapError(null); // Clear any errors
-                          
-                          // Show success modal
-                          console.log('Setting swap success data:', { inputTokensData, outputTokensData, transactionHash });
-                          setSwapSuccessData({
-                            inputTokens: inputTokensData,
-                            outputTokens: outputTokensData,
-                            transactionHash,
-                          });
-                          
-                          // Send success notification
-                          if (userFid && selectedTokens.size > 0) {
-                            const notification = NotificationTemplates.swapSuccess(
-                              selectedTokens.size,
-                              outputToken.symbol
-                            );
-                            sendNotification(userFid, notification).catch(console.error);
-                          }
-                          
-                          setSelectedTokens(new Set()); // Clear selection after successful swap
-                          setSimulationResult(null); // Reset simulation result after successful swap
-                        } else if (status.statusName === 'error') {
-                          console.error('Transaction error:', status.statusData);
-                          
-                          // Parse error message
-                          const statusData = status.statusData as { error?: { message?: string; code?: string | number } };
-                          const errorMessage = statusData?.error?.message || 'Transaction failed.';
-                          const errorCode = statusData?.error?.code;
 
-                          // Check if error is due to simulation failure
-                          const isSimulationError = errorMessage.includes('Simulation failed') ||
-                                                    errorMessage.includes('New quote fetched');
+                  // Helper function to process successful swap
+                  const processSwapSuccess = async (response: { transactionReceipts?: Array<{ transactionHash?: string }> }) => {
+                    console.log('Processing swap success:', response);
+                    setIsSwapping(false);
+                    setIsConfirmingReceipt(true);
 
-                          // Determine if user can retry
-                          let canRetry = true;
-                          let userFriendlyMessage = errorMessage;
+                    const transactionHash = response?.transactionReceipts?.[0]?.transactionHash;
+                    console.log('Swap transaction hash:', transactionHash);
 
-                          // Handle specific error cases
-                          if (errorCode === 4001 || errorMessage.includes('User rejected')) {
-                            userFriendlyMessage = 'Transaction was cancelled by user.';
-                            canRetry = true;
-                          } else if (errorCode === -32603 || errorMessage.includes('execution reverted')) {
-                            userFriendlyMessage = 'Transaction execution failed. Please check your balance or approval status.';
-                            canRetry = true;
-                          } else if (errorMessage.includes('insufficient funds') || errorMessage.includes('gas')) {
-                            userFriendlyMessage = 'Insufficient gas. Please check your balance.';
-                            canRetry = true;
-                          } else if (isSimulationError) {
-                            // Simulation failed - new quote was already fetched
-                            setSimulationResult(null);
-                            userFriendlyMessage = 'Route validation failed. New route found. Please try again.';
-                            canRetry = true;
-                          }
-                          
-                          // Show error modal
-                          setSwapError({
-                            message: userFriendlyMessage,
-                            isSimulationError,
-                            canRetry,
-                          });
-                          
-                          // Reset simulation result if it was a simulation error
-                          if (isSimulationError) {
-                            setSimulationResult(null);
-                          }
-                          
-                          // Send failure notification
-                          if (userFid) {
-                            const notification = NotificationTemplates.swapFailed();
-                            sendNotification(userFid, notification).catch(console.error);
+                    // Fetch actual token transfers from transaction logs
+                    const inputTokensData: Array<{ symbol: string; amount: string; address: string; image: string | null }> = [];
+                    const outputTokensData: Array<{ symbol: string; amount: string; address: string; image: string | null }> = [];
+
+                    if (transactionHash && publicClient && address) {
+                      try {
+                        // Get transaction receipt
+                        const receipt = await publicClient.getTransactionReceipt({
+                          hash: transactionHash as Hex,
+                        });
+
+                        // Parse Transfer events from logs
+                        const transferEvents = parseEventLogs({
+                          abi: [{
+                            type: 'event',
+                            name: 'Transfer',
+                            inputs: [
+                              { type: 'address', indexed: true, name: 'from' },
+                              { type: 'address', indexed: true, name: 'to' },
+                              { type: 'uint256', indexed: false, name: 'value' },
+                            ],
+                          }],
+                          logs: receipt.logs,
+                        });
+
+                        const userAddressLower = address.toLowerCase();
+                        const tokenTransfers = new Map<string, { sent: bigint; received: bigint; address: string }>();
+
+                        for (const event of transferEvents) {
+                          if (event.eventName === 'Transfer') {
+                            const from = (event.args as { from: string; to: string; value: bigint }).from.toLowerCase();
+                            const to = (event.args as { from: string; to: string; value: bigint }).to.toLowerCase();
+                            const value = (event.args as { from: string; to: string; value: bigint }).value;
+                            const tokenAddress = event.address.toLowerCase();
+
+                            if (from === userAddressLower || to === userAddressLower) {
+                              if (!tokenTransfers.has(tokenAddress)) {
+                                tokenTransfers.set(tokenAddress, { sent: BigInt(0), received: BigInt(0), address: event.address });
+                              }
+                              const transfer = tokenTransfers.get(tokenAddress)!;
+                              if (from === userAddressLower) transfer.sent += value;
+                              if (to === userAddressLower) transfer.received += value;
+                            }
                           }
                         }
-                      }}
-                    >
-                      <div ref={swapButtonWrapperRef}>
-                        <TransactionButton
-                          className={styles.swapButton}
-                          text={buttonText}
-                        />
-                      </div>
-                      <TransactionStatus>
-                        <TransactionStatusLabel />
-                        <TransactionStatusAction />
-                      </TransactionStatus>
-                    </Transaction>
+
+                        for (const [tokenAddr, transfer] of tokenTransfers.entries()) {
+                          const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddr) ||
+                                       tokenList.find(t => t.address.toLowerCase() === tokenAddr);
+                          if (token) {
+                            const decimals = token.decimals || 18;
+                            if (transfer.sent > 0) {
+                              inputTokensData.push({
+                                symbol: token.symbol,
+                                amount: formatBigIntAmount(transfer.sent, decimals),
+                                address: transfer.address,
+                                image: token.image || null,
+                              });
+                            }
+                            if (transfer.received > 0) {
+                              outputTokensData.push({
+                                symbol: token.symbol,
+                                amount: formatBigIntAmount(transfer.received, decimals),
+                                address: transfer.address,
+                                image: token.image || null,
+                              });
+                            }
+                          }
+                        }
+                      } catch (error) {
+                        console.error('Error parsing transaction logs:', error);
+                        // Fallback to quote data
+                        if (quoteResult?.inTokens && quoteResult?.inAmounts) {
+                          quoteResult.inTokens.forEach((tokenAddr, index) => {
+                            const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddr.toLowerCase()) ||
+                                         tokenList.find(t => t.address.toLowerCase() === tokenAddr.toLowerCase());
+                            if (token) {
+                              inputTokensData.push({
+                                symbol: token.symbol,
+                                amount: formatBigIntAmount(BigInt(quoteResult.inAmounts?.[index] || '0'), token.decimals || 18),
+                                address: tokenAddr,
+                                image: token.image || null,
+                              });
+                            }
+                          });
+                        }
+                        if (quoteResult?.outTokens && quoteResult?.outAmounts) {
+                          quoteResult.outTokens.forEach((tokenAddr, index) => {
+                            const token = allTokenBalances.find(t => t.address.toLowerCase() === tokenAddr.toLowerCase()) ||
+                                         tokenList.find(t => t.address.toLowerCase() === tokenAddr.toLowerCase());
+                            if (token) {
+                              outputTokensData.push({
+                                symbol: token.symbol,
+                                amount: formatBigIntAmount(BigInt(quoteResult.outAmounts?.[index] || '0'), token.decimals || 18),
+                                address: tokenAddr,
+                                image: token.image || null,
+                              });
+                            }
+                          });
+                        }
+                      }
+                    }
+
+                    // Close quote modal and show success
+                    setQuoteResult(null);
+                    setSwapError(null);
+                    setSwapSuccessData({
+                      inputTokens: inputTokensData,
+                      outputTokens: outputTokensData,
+                      transactionHash: transactionHash || undefined,
+                    });
+
+                    // Send notification
+                    if (userFid && selectedTokens.size > 0) {
+                      const notification = NotificationTemplates.swapSuccess(selectedTokens.size, outputToken.symbol);
+                      sendNotification(userFid, notification).catch(console.error);
+                    }
+
+                    // Reset states
+                    setSelectedTokens(new Set());
+                    setSimulationResult(null);
+                    setIsSwapping(false);
+                    setIsConfirmingReceipt(false);
+                    swapInitiatedRef.current = false;
+                  };
+
+                  // Direct swap handler - supports both batch (Smart Wallet) and single (EOA) transactions
+                  const handleDirectSwap = async () => {
+                    try {
+                      swapInitiatedRef.current = true;
+                      setIsSwapping(true);
+
+                      // Get the swap calls
+                      const calls = await prepareSwapCallsWithSimulation();
+                      if (!calls || calls.length === 0) {
+                        throw new Error('No swap calls available');
+                      }
+
+                      // Check if batch transactions are supported
+                      if (batchSupported) {
+                        // Smart Wallet: Use batch transactions with gas sponsorship
+                        console.log('Starting batch swap with useSendCalls (Smart Wallet)...');
+                        console.log('Sending batch calls:', calls);
+
+                        const result = await sendCallsAsync({
+                          calls: calls.map(call => ({
+                            to: call.to as `0x${string}`,
+                            data: call.data as `0x${string}`,
+                            value: call.value ? BigInt(call.value) : BigInt(0),
+                          })),
+                          capabilities: {
+                            paymasterService: {
+                              url: `https://api.developer.coinbase.com/rpc/v1/base/${process.env.NEXT_PUBLIC_ONCHAINKIT_API_KEY}`,
+                            },
+                          },
+                        });
+
+                        console.log('sendCallsAsync result:', result);
+
+                        // The result contains the call bundle ID
+                        if (result && result.id) {
+                          console.log('Captured call ID from sendCallsAsync:', result.id);
+                          setPendingCallId(result.id);
+                        } else if (typeof result === 'string') {
+                          console.log('Captured call ID (string) from sendCallsAsync:', result);
+                          setPendingCallId(result);
+                        }
+                      } else {
+                        // EOA Wallet: Send transactions sequentially
+                        console.log('Starting sequential swap with useSendTransaction (EOA)...');
+
+                        for (let i = 0; i < calls.length; i++) {
+                          const call = calls[i];
+                          console.log(`Sending transaction ${i + 1}/${calls.length}:`, call);
+
+                          await sendTransactionAsync({
+                            to: call.to as `0x${string}`,
+                            data: call.data as `0x${string}`,
+                            value: call.value ? BigInt(call.value) : BigInt(0),
+                          });
+
+                          // Note: useWaitForTransactionReceipt will handle the receipt
+                          // The effect will process success when txReceipt is available
+                        }
+
+                        console.log('All EOA transactions sent, waiting for receipts...');
+                      }
+                    } catch (error) {
+                      console.error('Direct swap error:', error);
+                      const errorMessage = (error as Error)?.message || 'Transaction failed.';
+
+                      let userFriendlyMessage = errorMessage;
+                      const isSimulationError = errorMessage.includes('Simulation failed');
+
+                      if (errorMessage.includes('User rejected') || errorMessage.includes('rejected')) {
+                        userFriendlyMessage = 'Transaction was cancelled by user.';
+                      } else if (errorMessage.includes('execution reverted')) {
+                        userFriendlyMessage = 'Transaction execution failed. Please check your balance or approval status.';
+                      } else if (errorMessage.includes('insufficient funds') || errorMessage.includes('gas')) {
+                        userFriendlyMessage = 'Insufficient gas. Please check your balance.';
+                      }
+
+                      setSwapError({
+                        message: userFriendlyMessage,
+                        isSimulationError,
+                        canRetry: true,
+                      });
+
+                      if (userFid) {
+                        sendNotification(userFid, NotificationTemplates.swapFailed()).catch(console.error);
+                      }
+
+                      setIsSwapping(false);
+                      setIsConfirmingReceipt(false);
+                      swapInitiatedRef.current = false;
+                      setPendingCallId(null);
+                    }
+                  };
+
+                  const isTransactionInProgress = isSwapping || isSendingCalls || isSendingTransaction || isWaitingForReceipt;
+
+                  return (
+                    <div ref={swapButtonWrapperRef}>
+                      <button
+                        className={styles.swapButton}
+                        onClick={handleDirectSwap}
+                        disabled={isTransactionInProgress}
+                      >
+                        {isTransactionInProgress ? 'Swapping...' : buttonText}
+                      </button>
+                    </div>
                   );
                 })()}
               </div>
